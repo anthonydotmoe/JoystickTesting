@@ -27,10 +27,11 @@ HRESULT SetupForIsXInputDevice()
         return comInit.hr();
 
     ComPtr<IWbemLocator> locator;
-    HRESULT hr = CoCreateInstance(__uuidof(WbemLocator),
+    HRESULT hr = CoCreateInstance(
+        CLSID_WbemLocator,
         nullptr,
         CLSCTX_INPROC_SERVER,
-        __uuidof(IWbemLocator),
+        IID_IWbemLocator,
         reinterpret_cast<LPVOID*>(locator.put()));
     if (FAILED(hr))
         return hr;
