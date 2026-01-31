@@ -3,6 +3,7 @@
 
 #include "DirectInputManager.h"
 
+#include "ComPtr.h"
 #include "JoystickNetwork.h"
 #include "XInputFilter.h"
 #include "res.h"
@@ -18,11 +19,8 @@
 #include <string>
 
 namespace {
-#define SAFE_DELETE(p)  { if (p) { delete (p);     (p) = nullptr; } }
-#define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p) = nullptr; } }
-
-LPDIRECTINPUT8 g_directInput = nullptr;
-LPDIRECTINPUTDEVICE8 g_joystick = nullptr;
+ComPtr<IDirectInput8> g_directInput;
+ComPtr<IDirectInputDevice8> g_joystick;
 bool g_filterOutXinputDevices = false;
 
 struct DI_ENUM_CONTEXT
@@ -49,7 +47,7 @@ void AcquireJoystick()
 HRESULT InitDirectInput(HWND hDlg)
 {
     HRESULT hr = DirectInput8Create(GetModuleHandle(nullptr), DIRECTINPUT_VERSION,
-        IID_IDirectInput8, reinterpret_cast<void**>(&g_directInput), nullptr);
+        IID_IDirectInput8, reinterpret_cast<void**>(g_directInput.put()), nullptr);
     if (FAILED(hr))
         return hr;
 
@@ -61,15 +59,15 @@ HRESULT InitDirectInput(HWND hDlg)
     enumContext.preferredJoyCfg = &preferredJoyCfg;
     enumContext.preferredJoyCfgValid = false;
 
-    IDirectInputJoyConfig8* joyConfig = nullptr;
-    hr = g_directInput->QueryInterface(IID_IDirectInputJoyConfig8, reinterpret_cast<void**>(&joyConfig));
+    ComPtr<IDirectInputJoyConfig8> joyConfig;
+    hr = g_directInput->QueryInterface(IID_IDirectInputJoyConfig8,
+        reinterpret_cast<void**>(joyConfig.put()));
     if (FAILED(hr))
         return hr;
 
     preferredJoyCfg.dwSize = sizeof(preferredJoyCfg);
     if (SUCCEEDED(joyConfig->GetConfig(0, &preferredJoyCfg, DIJC_GUIDINSTANCE)))
         enumContext.preferredJoyCfgValid = true;
-    SAFE_RELEASE(joyConfig);
 
     hr = g_directInput->EnumDevices(DI8DEVCLASS_GAMECTRL,
         EnumJoysticksCallback, &enumContext, DIEDFL_ATTACHEDONLY);
@@ -107,8 +105,8 @@ void FreeDirectInput()
     if (g_joystick)
         g_joystick->Unacquire();
 
-    SAFE_RELEASE(g_joystick);
-    SAFE_RELEASE(g_directInput);
+    g_joystick.reset();
+    g_directInput.reset();
 }
 
 HRESULT UpdateInputState(HWND hDlg)
@@ -174,7 +172,7 @@ BOOL CALLBACK EnumJoysticksCallback(const DIDEVICEINSTANCE* pdidInstance, VOID* 
         !IsEqualGUID(pdidInstance->guidInstance, enumContext->preferredJoyCfg->guidInstance))
         return DIENUM_CONTINUE;
 
-    HRESULT hr = g_directInput->CreateDevice(pdidInstance->guidInstance, &g_joystick, nullptr);
+    HRESULT hr = g_directInput->CreateDevice(pdidInstance->guidInstance, g_joystick.put(), nullptr);
     if (FAILED(hr))
         return DIENUM_CONTINUE;
 
