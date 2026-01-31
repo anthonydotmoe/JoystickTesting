@@ -20,7 +20,15 @@ target_include_directories(JoystickTesting PRIVATE ${INCLUDE_DIR})
 target_compile_features(JoystickTesting PRIVATE cxx_std_20)
 
 target_link_libraries(JoystickTesting PRIVATE
-
+    comctl32
+    dinput8
+    dxguid
+    ole32
+    oleaut32
+    shell32
+    wbemuuid
+    winhttp
+    ws2_32
 )
 
 target_link_options(JoystickTesting PRIVATE "/MANIFEST:NO")

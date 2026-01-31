@@ -1,6 +1,8 @@
 #include "Windows.h"
 #include "res.h"
 
+#define IDC_STATIC -1
+
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "application.manifest"
 
 IDI_MAIN                ICON    DISCARDABLE     "icon.ico"
