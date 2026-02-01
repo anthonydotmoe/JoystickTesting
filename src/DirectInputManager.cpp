@@ -16,8 +16,6 @@
 #include <dinputd.h>
 #pragma warning(pop)
 
-#include <string>
-
 namespace {
 ComPtr<IDirectInput8> g_directInput;
 ComPtr<IDirectInputDevice8> g_joystick;
@@ -151,13 +149,13 @@ HRESULT UpdateInputState(HWND hDlg)
     }
     SetWindowText(GetDlgItem(hDlg, IDC_BUTTONS), strText);
 
-    std::string joyVariables = "X:" + std::to_string(js.lX) + "," +
-        "Y:" + std::to_string(js.lY) + "," +
-        "Z:" + std::to_string(js.lZ) + ",";
+    JoystickState state = {};
+    state.x = js.lX;
+    state.y = js.lY;
+    state.z = js.lZ;
+    SubmitJoystickState(state);
 
-    SendJoystickUdpBroadcast(joyVariables);
-
-    return PostSampleWinHttp();
+    return S_OK;
 }
 
 namespace {

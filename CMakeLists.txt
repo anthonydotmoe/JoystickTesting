@@ -28,7 +28,6 @@ target_link_libraries(JoystickTesting PRIVATE
     shell32
     wbemuuid
     winhttp
-    ws2_32
 )
 
 target_link_options(JoystickTesting PRIVATE "/MANIFEST:NO")

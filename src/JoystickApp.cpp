@@ -1,6 +1,7 @@
 #include "JoystickApp.h"
 
 #include "DirectInputManager.h"
+#include "JoystickNetwork.h"
 #include "res.h"
 
 #include <commctrl.h>
@@ -70,6 +71,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                 EndDialog(hDlg, 0);
             }
 
+            StartNetworkWorker();
             SetTimer(hDlg, 0, 1000 / 30, nullptr);
             return TRUE;
 
@@ -102,6 +104,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
         case WM_DESTROY:
             KillTimer(hDlg, 0);
+            StopNetworkWorker();
             FreeDirectInput();
             return TRUE;
     }

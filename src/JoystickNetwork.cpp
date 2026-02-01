@@ -1,54 +1,30 @@
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-
 #include "JoystickNetwork.h"
 
-#include <winsock2.h>
 #include <Windows.h>
 #include <winhttp.h>
 
-#include <cstdlib>
-#include <cstring>
-#include <iostream>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 
-void SendJoystickUdpBroadcast(const std::string& payload)
+namespace {
+constexpr auto kSendInterval = std::chrono::milliseconds(100);
+
+std::string BuildMovePayload(const JoystickState& state)
 {
-    WSADATA wsaData;
-    SOCKET socketHandle;
-    SOCKADDR_IN sockAddr;
-    hostent* host;
-    std::string baseip = "255.255.255.255";
-
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
-    {
-        std::cout << "WSAStartup failed.\n";
-        system("pause");
-    }
-
-    socketHandle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    host = gethostbyname(baseip.c_str());
-
-    sockAddr.sin_port = htons(8888);
-    sockAddr.sin_family = AF_INET;
-    sockAddr.sin_addr.s_addr = *((unsigned long*)host->h_addr);
-
-    if (connect(socketHandle, reinterpret_cast<SOCKADDR*>(&sockAddr), sizeof(sockAddr)) != 0)
-    {
-    }
-
-    send(socketHandle, payload.c_str(), static_cast<int>(strlen(payload.c_str())), 0);
-
-    std::cout << "\n\nPress ANY key to close.\n\n";
-    std::cin.ignore();
-    std::cin.get();
-
-    closesocket(socketHandle);
-    WSACleanup();
+    return "{"
+        "\"type\":\"continuous\","
+        "\"payload\":{"
+        "\"x\":" + std::to_string(state.x) + ","
+        "\"y\":" + std::to_string(state.y) + ","
+        "\"z\":" + std::to_string(state.z) +
+        "}}";
 }
 
-HRESULT PostSampleWinHttp()
+HRESULT PostSampleWinHttp(const std::string& payload)
 {
-    const std::string postData = R"({"hello":"world"})";
     DWORD bytesAvailable = 0;
 
     HINTERNET hSession = WinHttpOpen(
@@ -59,22 +35,18 @@ HRESULT PostSampleWinHttp()
         0);
 
     if (!hSession)
-    {
-        std::cerr << "WinHttpOpen failed\n";
-        return 1;
-    }
+        return E_FAIL;
 
     HINTERNET hConnect = WinHttpConnect(
         hSession,
-        L"test.com",
+        L"example.com",
         INTERNET_DEFAULT_HTTPS_PORT,
         0);
 
     if (!hConnect)
     {
-        std::cerr << "WinHttpConnect failed\n";
         WinHttpCloseHandle(hSession);
-        return 1;
+        return E_FAIL;
     }
 
     HINTERNET hRequest = WinHttpOpenRequest(
@@ -88,10 +60,9 @@ HRESULT PostSampleWinHttp()
 
     if (!hRequest)
     {
-        std::cerr << "WinHttpOpenRequest failed\n";
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
-        return 1;
+        return E_FAIL;
     }
 
     const wchar_t* headers =
@@ -101,23 +72,17 @@ HRESULT PostSampleWinHttp()
         hRequest,
         headers,
         -1L,
-        (LPVOID)postData.data(),
-        (DWORD)postData.size(),
-        (DWORD)postData.size(),
+        (LPVOID)payload.data(),
+        static_cast<DWORD>(payload.size()),
+        static_cast<DWORD>(payload.size()),
         0);
 
     if (!results)
-    {
-        std::cerr << "WinHttpSendRequest failed\n";
         goto cleanup;
-    }
 
     results = WinHttpReceiveResponse(hRequest, nullptr);
     if (!results)
-    {
-        std::cerr << "WinHttpReceiveResponse failed\n";
         goto cleanup;
-    }
 
     do
     {
@@ -135,8 +100,6 @@ HRESULT PostSampleWinHttp()
             &buffer[0],
             bytesAvailable,
             &bytesRead);
-
-        std::cout << buffer;
     } while (bytesAvailable > 0);
 
 cleanup:
@@ -144,4 +107,105 @@ cleanup:
     WinHttpCloseHandle(hConnect);
     WinHttpCloseHandle(hSession);
     return S_OK;
+}
+
+class NetworkWorker
+{
+public:
+    void Start()
+    {
+        std::scoped_lock lock(mutex_);
+        if (running_)
+            return;
+        running_ = true;
+        stopRequested_ = false;
+        worker_ = std::thread(&NetworkWorker::Run, this);
+    }
+
+    void Stop()
+    {
+        {
+            std::scoped_lock lock(mutex_);
+            if (!running_)
+                return;
+            stopRequested_ = true;
+        }
+        cv_.notify_all();
+        if (worker_.joinable())
+            worker_.join();
+
+        std::scoped_lock lock(mutex_);
+        running_ = false;
+        hasState_ = false;
+    }
+
+    void Submit(const JoystickState& state)
+    {
+        {
+            std::scoped_lock lock(mutex_);
+            latestState_ = state;
+            hasState_ = true;
+        }
+        cv_.notify_all();
+    }
+
+private:
+    void Run()
+    {
+        std::unique_lock lock(mutex_);
+        auto nextSend = std::chrono::steady_clock::now() + kSendInterval;
+
+        for (;;)
+        {
+            cv_.wait_until(lock, nextSend, [&]() { return stopRequested_ || hasState_; });
+            if (stopRequested_)
+                break;
+
+            if (!hasState_)
+            {
+                nextSend = std::chrono::steady_clock::now() + kSendInterval;
+                continue;
+            }
+
+            JoystickState snapshot = latestState_;
+            hasState_ = false;
+            lock.unlock();
+
+            const std::string payload = BuildMovePayload(snapshot);
+            PostSampleWinHttp(payload);
+
+            lock.lock();
+            nextSend = std::chrono::steady_clock::now() + kSendInterval;
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::thread worker_;
+    bool running_ = false;
+    bool stopRequested_ = false;
+    bool hasState_ = false;
+    JoystickState latestState_ = {};
+};
+
+NetworkWorker& GetWorker()
+{
+    static NetworkWorker worker;
+    return worker;
+}
+}
+
+void StartNetworkWorker()
+{
+    GetWorker().Start();
+}
+
+void StopNetworkWorker()
+{
+    GetWorker().Stop();
+}
+
+void SubmitJoystickState(const JoystickState& state)
+{
+    GetWorker().Submit(state);
 }
