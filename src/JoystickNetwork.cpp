@@ -20,7 +20,6 @@
 namespace {
 constexpr auto kSendInterval = std::chrono::milliseconds(16);
 constexpr wchar_t kRegistrySubkey[] = L"SOFTWARE\\JoystickTesting";
-constexpr size_t kMaxLogBodyBytes = 1024;
 constexpr wchar_t kRegistryInvertYName[] = L"Invert Y";
 constexpr DWORD kReturnHomeAfterInactivityMs = 60000;
 
@@ -936,11 +935,8 @@ HRESULT SendJsonRequest(HINTERNET connection,
             &buffer[0],
             bytesAvailable,
             &bytesRead);
-        if (bytesRead > 0 && responseBody.size() < kMaxLogBodyBytes)
-        {
-            const size_t remaining = kMaxLogBodyBytes - responseBody.size();
-            responseBody.append(buffer.data(), std::min<size_t>(bytesRead, remaining));
-        }
+        if (bytesRead > 0)
+            responseBody.append(buffer.data(), bytesRead);
     } while (bytesAvailable > 0);
 
 cleanup:
@@ -956,7 +952,7 @@ cleanup:
         AppendLogLine(line);
     }
     if (outResponseBody)
-        *outResponseBody = responseBody;
+        *outResponseBody = std::move(responseBody);
     return hr;
 }
 

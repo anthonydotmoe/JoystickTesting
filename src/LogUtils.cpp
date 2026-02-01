@@ -5,7 +5,6 @@
 #include <Windows.h>
 
 #include <cstdio>
-#include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
@@ -67,44 +66,22 @@ std::wstring BuildTimestampedLine(const std::wstring& line)
 }
 }
 
-std::wstring GetLogFilePath()
-{
-    wchar_t modulePath[MAX_PATH] = {};
-    if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) == 0)
-        return L"JoystickTesting.log";
-
-    std::wstring path(modulePath);
-    const size_t lastSlash = path.find_last_of(L"\\/");
-    if (lastSlash != std::wstring::npos)
-        path.resize(lastSlash + 1);
-    path += L"JoystickTesting.log";
-    return path;
-}
-
 void AppendLogLine(const std::wstring& line)
 {
     LogState& state = GetLogState();
     std::scoped_lock lock(state.mutex);
     EnsureLoggingInitialized(state);
 
-    const std::wstring timestamped = BuildTimestampedLine(line);
-    if (state.debugEnabled && state.consoleReady)
-    {
-        HANDLE outputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (outputHandle && outputHandle != INVALID_HANDLE_VALUE)
-        {
-            DWORD written = 0;
-            WriteConsoleW(outputHandle, timestamped.c_str(),
-                static_cast<DWORD>(timestamped.size()), &written, nullptr);
-            WriteConsoleW(outputHandle, L"\r\n", 2, &written, nullptr);
-            return;
-        }
-    }
-
-    const std::wstring path = GetLogFilePath();
-    std::wofstream stream(path, std::ios::app);
-    if (!stream.is_open())
+    if (!state.debugEnabled || !state.consoleReady)
         return;
 
-    stream << timestamped << L"\n";
+    const std::wstring timestamped = BuildTimestampedLine(line);
+    HANDLE outputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!outputHandle || outputHandle == INVALID_HANDLE_VALUE)
+        return;
+
+    DWORD written = 0;
+    WriteConsoleW(outputHandle, timestamped.c_str(),
+        static_cast<DWORD>(timestamped.size()), &written, nullptr);
+    WriteConsoleW(outputHandle, L"\r\n", 2, &written, nullptr);
 }
