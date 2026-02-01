@@ -22,6 +22,7 @@ namespace {
 constexpr double kDeadzoneMagnitude = 20.0; // Raw axis magnitude threshold.
 constexpr double kAxisMaxMagnitude = 255.0;
 constexpr double kOutputMaxMagnitude = 750.0;
+constexpr double kTwistDeadzone = 10.0;
 ComPtr<IDirectInput8> g_directInput;
 ComPtr<IDirectInputDevice8> g_joystick;
 bool g_filterOutXinputDevices = false;
@@ -137,7 +138,9 @@ HRESULT UpdateInputState(HWND hDlg)
 
     const double x = static_cast<double>(js.lX);
     const double y = static_cast<double>(js.lY);
-    const double z = static_cast<double>(js.lZ);
+    double z = static_cast<double>(js.lZ);
+    if (std::abs(z) <= kTwistDeadzone)
+        z = 0.0;
     const double magnitude = std::sqrt((x * x) + (y * y) + (z * z));
     const double maxMagnitude = kAxisMaxMagnitude;
     double displayX = 0.0;
