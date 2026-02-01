@@ -14,3 +14,5 @@ void StartNetworkWorker();
 void StopNetworkWorker();
 void SubmitJoystickState(const JoystickState& state);
 std::wstring GetNetworkStatusText();
+bool GetInvertYSetting();
+void SetInvertYSetting(bool enabled);

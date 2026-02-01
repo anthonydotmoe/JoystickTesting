@@ -71,6 +71,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                 EndDialog(hDlg, 0);
             }
 
+            CheckDlgButton(hDlg, IDC_INVERT_Y, GetInvertYSetting() ? BST_CHECKED : BST_UNCHECKED);
             StartNetworkWorker();
             SetTimer(hDlg, 0, 1000 / 30, nullptr);
             return TRUE;
@@ -98,6 +99,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 case IDCANCEL:
                     EndDialog(hDlg, 0);
+                    return TRUE;
+                case IDC_INVERT_Y:
+                    if (HIWORD(wParam) == BN_CLICKED)
+                    {
+                        const bool enabled = (IsDlgButtonChecked(hDlg, IDC_INVERT_Y) == BST_CHECKED);
+                        SetInvertYSetting(enabled);
+                    }
                     return TRUE;
             }
             break;

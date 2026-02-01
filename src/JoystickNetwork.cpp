@@ -15,9 +15,10 @@
 #include <vector>
 
 namespace {
-constexpr auto kSendInterval = std::chrono::milliseconds(100);
+constexpr auto kSendInterval = std::chrono::milliseconds(16);
 constexpr wchar_t kRegistrySubkey[] = L"SOFTWARE\\JoystickTesting";
 constexpr size_t kMaxLogBodyBytes = 1024;
+constexpr wchar_t kRegistryInvertYName[] = L"Invert Y";
 
 struct NetworkConfig
 {
@@ -115,12 +116,50 @@ std::wstring ReadRegistryStringValue(HKEY root, const wchar_t* subkey, const wch
     return buffer;
 }
 
+bool ReadRegistryDwordValue(HKEY root, const wchar_t* subkey, const wchar_t* valueName, DWORD* outValue)
+{
+    DWORD type = 0;
+    DWORD size = sizeof(DWORD);
+    DWORD value = 0;
+    if (RegGetValueW(root, subkey, valueName, RRF_RT_REG_DWORD, &type, &value, &size) != ERROR_SUCCESS)
+        return false;
+
+    if (outValue)
+        *outValue = value;
+    return true;
+}
+
 std::wstring ReadRegistryString(const wchar_t* valueName)
 {
     std::wstring value = ReadRegistryStringValue(HKEY_CURRENT_USER, kRegistrySubkey, valueName);
     if (!value.empty())
         return value;
     return ReadRegistryStringValue(HKEY_LOCAL_MACHINE, kRegistrySubkey, valueName);
+}
+
+bool ReadRegistryDword(const wchar_t* valueName, DWORD* outValue)
+{
+    if (ReadRegistryDwordValue(HKEY_CURRENT_USER, kRegistrySubkey, valueName, outValue))
+        return true;
+    return ReadRegistryDwordValue(HKEY_LOCAL_MACHINE, kRegistrySubkey, valueName, outValue);
+}
+
+bool WriteRegistryDword(const wchar_t* valueName, DWORD value)
+{
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistrySubkey, 0, nullptr, 0,
+            KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
+        return false;
+
+    const LONG result = RegSetValueExW(
+        key,
+        valueName,
+        0,
+        REG_DWORD,
+        reinterpret_cast<const BYTE*>(&value),
+        sizeof(value));
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
 }
 
 std::wstring TrimWide(const std::wstring& value)
@@ -886,4 +925,17 @@ void SubmitJoystickState(const JoystickState& state)
 std::wstring GetNetworkStatusText()
 {
     return GetWorker().GetStatus();
+}
+
+bool GetInvertYSetting()
+{
+    DWORD value = 0;
+    if (!ReadRegistryDword(kRegistryInvertYName, &value))
+        return false;
+    return value != 0;
+}
+
+void SetInvertYSetting(bool enabled)
+{
+    WriteRegistryDword(kRegistryInvertYName, enabled ? 1u : 0u);
 }

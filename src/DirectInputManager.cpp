@@ -157,13 +157,13 @@ HRESULT UpdateInputState(HWND hDlg)
         const double outputScale = scaledMagnitude * kOutputMaxMagnitude;
 
         displayX = x * invMagnitude * outputScale;
-        const double ySign = (IsDlgButtonChecked(hDlg, IDC_INVERT_Y) == BST_CHECKED) ? -1.0 : 1.0;
+        const double ySign = GetInvertYSetting() ? -1.0 : 1.0;
         displayY = y * invMagnitude * outputScale * ySign;
         displayZ = z * invMagnitude * outputScale;
         JoystickState state = {};
-        state.x = displayX;
-        state.y = displayY;
-        state.z = displayZ;
+        state.x = std::round(displayX);
+        state.y = std::round(displayY);
+        state.z = std::round(displayZ);
         SubmitJoystickState(state);
         wasActive = true;
     }
@@ -180,11 +180,11 @@ HRESULT UpdateInputState(HWND hDlg)
         wasActive = false;
     }
 
-    _stprintf_s(strText, 512, TEXT("%.3f"), displayX);
+    _stprintf_s(strText, 512, TEXT("%.0f"), displayX);
     SetWindowText(GetDlgItem(hDlg, IDC_X_AXIS), strText);
-    _stprintf_s(strText, 512, TEXT("%.3f"), displayY);
+    _stprintf_s(strText, 512, TEXT("%.0f"), displayY);
     SetWindowText(GetDlgItem(hDlg, IDC_Y_AXIS), strText);
-    _stprintf_s(strText, 512, TEXT("%.3f"), displayZ);
+    _stprintf_s(strText, 512, TEXT("%.0f"), displayZ);
     SetWindowText(GetDlgItem(hDlg, IDC_Z_AXIS), strText);
 
     _tcscpy_s(strText, 512, TEXT(""));
