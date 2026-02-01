@@ -3,6 +3,7 @@
 #define IDI_MAIN                        102
 #define IDD_JOYST_IMM                   103
 #define IDR_ACCELERATOR1                103
+#define IDD_SETTINGS                    200
 #define IDC_CLOSE                       1001
 #define IDC_X_AXIS                      1010
 #define IDC_Y_AXIS                      1011
@@ -36,3 +37,7 @@
 #define IDC_DISABLE_RETURN_HOME         1048
 #define IDC_CAMERA_LIST                 1049
 #define IDC_CAMERA_REFRESH              1050
+#define IDC_SETTINGS_BUTTON             1051
+#define IDC_SETTINGS_ADDRESS            2001
+#define IDC_SETTINGS_USERNAME           2002
+#define IDC_SETTINGS_PASSWORD           2003

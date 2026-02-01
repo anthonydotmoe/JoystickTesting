@@ -29,3 +29,4 @@ bool ConsumeReturnHomeSettingUpdate(bool* disabled);
 void RequestCameraListRefresh();
 bool ConsumeCameraListUpdate(std::vector<CameraInfo>* cameras);
 void SelectCameraId(const std::wstring& cameraId);
+void NotifyNetworkConfigChanged();

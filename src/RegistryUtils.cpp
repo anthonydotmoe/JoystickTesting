@@ -2,6 +2,41 @@
 
 #include <winreg.h>
 
+bool EnsureRegistryKey(const wchar_t* subkey)
+{
+    HKEY key = nullptr;
+    const LONG result = RegCreateKeyExW(HKEY_CURRENT_USER, subkey, 0, nullptr, 0,
+        KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (key)
+        RegCloseKey(key);
+    return result == ERROR_SUCCESS;
+}
+
+static bool EnsureRegistryValueImpl(const wchar_t* subkey,
+    const wchar_t* valueName,
+    DWORD type,
+    const BYTE* data,
+    DWORD size)
+{
+    HKEY key = nullptr;
+    const LONG openResult = RegCreateKeyExW(HKEY_CURRENT_USER, subkey, 0, nullptr, 0,
+        KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (openResult != ERROR_SUCCESS)
+        return false;
+
+    DWORD existingType = 0;
+    LONG queryResult = RegQueryValueExW(key, valueName, nullptr, &existingType, nullptr, nullptr);
+    if (queryResult == ERROR_SUCCESS)
+    {
+        RegCloseKey(key);
+        return true;
+    }
+
+    const LONG setResult = RegSetValueExW(key, valueName, 0, type, data, size);
+    RegCloseKey(key);
+    return setResult == ERROR_SUCCESS;
+}
+
 std::wstring ReadRegistryStringValue(HKEY root, const wchar_t* subkey, const wchar_t* valueName)
 {
     DWORD type = 0;
@@ -47,6 +82,13 @@ bool ReadRegistryDword(const wchar_t* subkey, const wchar_t* valueName, DWORD* o
     return ReadRegistryDwordValue(HKEY_LOCAL_MACHINE, subkey, valueName, outValue);
 }
 
+bool EnsureRegistryStringValue(const wchar_t* subkey, const wchar_t* valueName, const std::wstring& value)
+{
+    const DWORD size = static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t));
+    return EnsureRegistryValueImpl(subkey, valueName, REG_SZ,
+        reinterpret_cast<const BYTE*>(value.c_str()), size);
+}
+
 bool WriteRegistryDword(const wchar_t* subkey, const wchar_t* valueName, DWORD value)
 {
     HKEY key = nullptr;
@@ -63,4 +105,29 @@ bool WriteRegistryDword(const wchar_t* subkey, const wchar_t* valueName, DWORD v
         sizeof(value));
     RegCloseKey(key);
     return result == ERROR_SUCCESS;
+}
+
+bool WriteRegistryString(const wchar_t* subkey, const wchar_t* valueName, const std::wstring& value)
+{
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, subkey, 0, nullptr, 0,
+            KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
+        return false;
+
+    const DWORD size = static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t));
+    const LONG result = RegSetValueExW(
+        key,
+        valueName,
+        0,
+        REG_SZ,
+        reinterpret_cast<const BYTE*>(value.c_str()),
+        size);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
+}
+
+bool EnsureRegistryDwordValue(const wchar_t* subkey, const wchar_t* valueName, DWORD value)
+{
+    const BYTE* data = reinterpret_cast<const BYTE*>(&value);
+    return EnsureRegistryValueImpl(subkey, valueName, REG_DWORD, data, sizeof(value));
 }

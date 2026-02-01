@@ -783,6 +783,7 @@ public:
         stopRequested_ = false;
         needsReturnHomeQuery_ = true;
         needsCameraListRefresh_ = true;
+        configDirty_ = false;
         SetStatus(L"Starting");
         worker_ = std::thread(&NetworkWorker::Run, this);
     }
@@ -810,6 +811,7 @@ public:
         cameraList_.clear();
         selectedCameraId_.clear();
         needsCameraListRefresh_ = true;
+        configDirty_ = false;
         CloseHandles();
         ResetAuth();
         SetStatus(L"Stopped");
@@ -868,6 +870,15 @@ public:
         return DescribeSecureFailureFlags(lastSecureFailureFlags_);
     }
 
+    void NotifyConfigChanged()
+    {
+        {
+            std::scoped_lock lock(mutex_);
+            configDirty_ = true;
+        }
+        cv_.notify_all();
+    }
+
     void RequestCameraListRefresh()
     {
         {
@@ -908,12 +919,13 @@ private:
         {
             cv_.wait_until(lock, nextSend, [&]() {
                 return stopRequested_ || hasState_ || hasReturnHomeSetting_ || needsReturnHomeQuery_ ||
-                    needsCameraListRefresh_;
+                    needsCameraListRefresh_ || configDirty_;
             });
             if (stopRequested_)
                 break;
 
-            if (!hasState_ && !hasReturnHomeSetting_ && !needsReturnHomeQuery_ && !needsCameraListRefresh_)
+            if (!hasState_ && !hasReturnHomeSetting_ && !needsReturnHomeQuery_ &&
+                !needsCameraListRefresh_ && !configDirty_)
             {
                 nextSend = std::chrono::steady_clock::now() + kSendInterval;
                 continue;
@@ -925,6 +937,8 @@ private:
             const bool refreshCameraList = needsCameraListRefresh_;
             needsCameraListRefresh_ = false;
             const std::wstring selectedCameraId = selectedCameraId_;
+            const bool configDirty = configDirty_;
+            configDirty_ = false;
 
             JoystickState snapshot = latestState_;
             const bool sendMove = hasState_;
@@ -933,6 +947,15 @@ private:
                 (!returnHomeStateKnown_ && (sendMove || sendReturnHome));
             needsReturnHomeQuery_ = false;
             lock.unlock();
+
+            if (configDirty)
+            {
+                CloseHandles();
+                ResetAuth();
+                lock.lock();
+                nextSend = std::chrono::steady_clock::now() + kSendInterval;
+                continue;
+            }
 
             const bool hasCameraSelection = !selectedCameraId.empty();
             std::wstring cameraPath;
@@ -1292,6 +1315,7 @@ private:
     bool needsReturnHomeQuery_ = true;
     bool returnHomeStateKnown_ = false;
     bool needsCameraListRefresh_ = true;
+    bool configDirty_ = false;
     bool hasCameraListUpdate_ = false;
     std::vector<CameraInfo> cameraList_;
     std::wstring selectedCameraId_;
@@ -1603,6 +1627,11 @@ bool ConsumeCameraListUpdate(std::vector<CameraInfo>* cameras)
 void SelectCameraId(const std::wstring& cameraId)
 {
     GetWorker().SetSelectedCameraId(cameraId);
+}
+
+void NotifyNetworkConfigChanged()
+{
+    GetWorker().NotifyConfigChanged();
 }
 
 bool GetInvertYSetting()
