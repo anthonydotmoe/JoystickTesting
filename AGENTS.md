@@ -8,8 +8,6 @@ Some things the program will need to do:
   Schannel so the system trusted roots are used.
 - Connect to UniFi software, use a username and password to sign in with a POST
   request.
-  - For reference, there is an example showing how to log in in the file
-    [Unifi_Client.cs](references/Unifi_Client.cs).
 - Cache the response, containing CSRF and login tokens, re-using them on each
   subsequent request.
 - Open up Windows input management to retrieve joystick state
