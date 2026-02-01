@@ -41,3 +41,5 @@
 #define IDC_SETTINGS_ADDRESS            2001
 #define IDC_SETTINGS_USERNAME           2002
 #define IDC_SETTINGS_PASSWORD           2003
+#define IDC_SETTINGS_USE_API_KEY        2004
+#define IDC_SETTINGS_API_KEY            2005

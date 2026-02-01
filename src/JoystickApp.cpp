@@ -15,11 +15,14 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam);
 INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam);
 bool ShouldFilterXInputDevices();
 void EnsureRegistryDefaults();
+void UpdateSettingsAuthControls(HWND hDlg);
 
 constexpr wchar_t kRegistrySubkey[] = L"SOFTWARE\\JoystickTesting";
 constexpr wchar_t kRegistryControllerAddress[] = L"Controller Address";
 constexpr wchar_t kRegistryUsername[] = L"Username";
 constexpr wchar_t kRegistryPassword[] = L"Password";
+constexpr wchar_t kRegistryUseApiKey[] = L"Use API Key";
+constexpr wchar_t kRegistryApiKey[] = L"API Key";
 constexpr wchar_t kRegistryInvertYName[] = L"Invert Y";
 constexpr wchar_t kRegistryDebugName[] = L"Debug";
 
@@ -41,6 +44,23 @@ void LoadSettingsDialog(HWND hDlg)
         ReadRegistryString(kRegistrySubkey, kRegistryUsername).c_str());
     SetDlgItemTextW(hDlg, IDC_SETTINGS_PASSWORD,
         ReadRegistryString(kRegistrySubkey, kRegistryPassword).c_str());
+    SetDlgItemTextW(hDlg, IDC_SETTINGS_API_KEY,
+        ReadRegistryString(kRegistrySubkey, kRegistryApiKey).c_str());
+
+    DWORD useApiKey = 0;
+    ReadRegistryDword(kRegistrySubkey, kRegistryUseApiKey, &useApiKey);
+    CheckDlgButton(hDlg, IDC_SETTINGS_USE_API_KEY,
+        useApiKey != 0 ? BST_CHECKED : BST_UNCHECKED);
+
+    UpdateSettingsAuthControls(hDlg);
+}
+
+void UpdateSettingsAuthControls(HWND hDlg)
+{
+    const bool useApiKey = (IsDlgButtonChecked(hDlg, IDC_SETTINGS_USE_API_KEY) == BST_CHECKED);
+    EnableWindow(GetDlgItem(hDlg, IDC_SETTINGS_API_KEY), useApiKey);
+    EnableWindow(GetDlgItem(hDlg, IDC_SETTINGS_USERNAME), !useApiKey);
+    EnableWindow(GetDlgItem(hDlg, IDC_SETTINGS_PASSWORD), !useApiKey);
 }
 
 bool SaveSettingsDialog(HWND hDlg)
@@ -48,11 +68,41 @@ bool SaveSettingsDialog(HWND hDlg)
     const std::wstring address = TrimWide(GetDialogItemText(hDlg, IDC_SETTINGS_ADDRESS));
     const std::wstring username = TrimWide(GetDialogItemText(hDlg, IDC_SETTINGS_USERNAME));
     const std::wstring password = TrimWide(GetDialogItemText(hDlg, IDC_SETTINGS_PASSWORD));
+    const std::wstring apiKey = TrimWide(GetDialogItemText(hDlg, IDC_SETTINGS_API_KEY));
+    const bool useApiKey = (IsDlgButtonChecked(hDlg, IDC_SETTINGS_USE_API_KEY) == BST_CHECKED);
+
+    if (address.empty())
+    {
+        MessageBox(hDlg, TEXT("Controller address is required."),
+            TEXT("Settings"), MB_ICONERROR | MB_OK);
+        return false;
+    }
+
+    if (useApiKey)
+    {
+        if (apiKey.empty())
+        {
+            MessageBox(hDlg, TEXT("API key is required when enabled."),
+                TEXT("Settings"), MB_ICONERROR | MB_OK);
+            return false;
+        }
+    }
+    else
+    {
+        if (username.empty() || password.empty())
+        {
+            MessageBox(hDlg, TEXT("Username and password are required."),
+                TEXT("Settings"), MB_ICONERROR | MB_OK);
+            return false;
+        }
+    }
 
     const bool saved =
         WriteRegistryString(kRegistrySubkey, kRegistryControllerAddress, address) &&
         WriteRegistryString(kRegistrySubkey, kRegistryUsername, username) &&
-        WriteRegistryString(kRegistrySubkey, kRegistryPassword, password);
+        WriteRegistryString(kRegistrySubkey, kRegistryPassword, password) &&
+        WriteRegistryString(kRegistrySubkey, kRegistryApiKey, apiKey) &&
+        WriteRegistryDword(kRegistrySubkey, kRegistryUseApiKey, useApiKey ? 1u : 0u);
 
     if (!saved)
     {
@@ -118,6 +168,8 @@ void EnsureRegistryDefaults()
     EnsureRegistryStringValue(kRegistrySubkey, kRegistryControllerAddress, L"");
     EnsureRegistryStringValue(kRegistrySubkey, kRegistryUsername, L"");
     EnsureRegistryStringValue(kRegistrySubkey, kRegistryPassword, L"");
+    EnsureRegistryStringValue(kRegistrySubkey, kRegistryApiKey, L"");
+    EnsureRegistryDwordValue(kRegistrySubkey, kRegistryUseApiKey, 0);
     EnsureRegistryDwordValue(kRegistrySubkey, kRegistryInvertYName, 0);
     EnsureRegistryDwordValue(kRegistrySubkey, kRegistryDebugName, 0);
 }
@@ -138,6 +190,10 @@ INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
                 case IDOK:
                     if (SaveSettingsDialog(hDlg))
                         EndDialog(hDlg, IDOK);
+                    return TRUE;
+                case IDC_SETTINGS_USE_API_KEY:
+                    if (HIWORD(wParam) == BN_CLICKED)
+                        UpdateSettingsAuthControls(hDlg);
                     return TRUE;
                 case IDCANCEL:
                     EndDialog(hDlg, IDCANCEL);

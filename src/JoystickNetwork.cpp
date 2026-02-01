@@ -21,6 +21,11 @@ namespace {
 constexpr auto kSendInterval = std::chrono::milliseconds(16);
 constexpr wchar_t kRegistrySubkey[] = L"SOFTWARE\\JoystickTesting";
 constexpr wchar_t kRegistryInvertYName[] = L"Invert Y";
+constexpr wchar_t kRegistryControllerAddressName[] = L"Controller Address";
+constexpr wchar_t kRegistryUsernameName[] = L"Username";
+constexpr wchar_t kRegistryPasswordName[] = L"Password";
+constexpr wchar_t kRegistryUseApiKeyName[] = L"Use API Key";
+constexpr wchar_t kRegistryApiKeyName[] = L"API Key";
 constexpr DWORD kReturnHomeAfterInactivityMs = 60000;
 
 struct NetworkConfig
@@ -33,6 +38,8 @@ struct NetworkConfig
     std::wstring cameraListPath = L"/proxy/protect/integration/v1/cameras";
     std::string username;
     std::string password;
+    std::string apiKey;
+    bool useApiKey = false;
 };
 
 NetworkConfig& GetNetworkConfig()
@@ -77,16 +84,21 @@ void ApplyHostAndPort(NetworkConfig& config, const std::wstring& address)
 bool LoadConfigFromRegistry(NetworkConfig& config)
 {
     const std::wstring controllerAddress =
-        TrimWide(ReadRegistryString(kRegistrySubkey, L"Controller Address"));
-    const std::wstring userName = TrimWide(ReadRegistryString(kRegistrySubkey, L"Username"));
-    const std::wstring password = TrimWide(ReadRegistryString(kRegistrySubkey, L"Password"));
+        TrimWide(ReadRegistryString(kRegistrySubkey, kRegistryControllerAddressName));
+    const std::wstring userName = TrimWide(ReadRegistryString(kRegistrySubkey, kRegistryUsernameName));
+    const std::wstring password = TrimWide(ReadRegistryString(kRegistrySubkey, kRegistryPasswordName));
+    const std::wstring apiKey = TrimWide(ReadRegistryString(kRegistrySubkey, kRegistryApiKeyName));
+    DWORD useApiKeyValue = 0;
+    ReadRegistryDword(kRegistrySubkey, kRegistryUseApiKeyName, &useApiKeyValue);
 
-    if (controllerAddress.empty() || userName.empty() || password.empty())
+    if (controllerAddress.empty())
         return false;
 
     ApplyHostAndPort(config, controllerAddress);
     config.username = WideToUtf8(userName);
     config.password = WideToUtf8(password);
+    config.apiKey = WideToUtf8(apiKey);
+    config.useApiKey = (useApiKeyValue != 0);
     return true;
 }
 
@@ -765,6 +777,7 @@ HRESULT SendJsonRequest(HINTERNET connection,
     const std::string& payload,
     const std::wstring& cookieHeader,
     const std::wstring& csrfToken,
+    const std::string& apiKey,
     HttpResponse* response,
     DWORD* outWin32Error,
     std::wstring* outErrorText,
@@ -1174,11 +1187,22 @@ private:
 
         if (!configLoaded_)
         {
-            SetStatus(L"Registry config missing");
+            SetStatus(L"Controller address missing");
             return false;
         }
 
-        if (config.username.empty() || config.password.empty())
+        useApiKey_ = config.useApiKey;
+        apiKey_ = config.apiKey;
+
+        if (useApiKey_)
+        {
+            if (apiKey_.empty())
+            {
+                SetStatus(L"API key missing");
+                return false;
+            }
+        }
+        else if (config.username.empty() || config.password.empty())
         {
             SetStatus(L"Credentials missing");
             return false;
@@ -1191,12 +1215,19 @@ private:
             return false;
         }
 
+        if (useApiKey_)
+        {
+            loggedIn_ = true;
+            SetStatus(L"Using API key");
+            return true;
+        }
+
         HttpResponse response = {};
         const std::string payload = BuildLoginPayload(config);
         SetStatus(L"Logging in");
         DWORD error = 0;
         std::wstring errorText;
-        if (FAILED(SendJsonRequest(connection_, L"POST", config.loginPath, payload, L"", L"", &response,
+        if (FAILED(SendJsonRequest(connection_, L"POST", config.loginPath, payload, L"", L"", "", &response,
             &error, &errorText, nullptr, this)))
         {
             SetStatusError(L"Login failed", error, errorText);
@@ -1228,6 +1259,8 @@ private:
         loggedIn_ = false;
         cookieHeader_.clear();
         csrfToken_.clear();
+        apiKey_.clear();
+        useApiKey_ = false;
         configLoaded_ = false;
         needsReturnHomeQuery_ = true;
         returnHomeStateKnown_ = false;
@@ -1264,12 +1297,15 @@ private:
         std::wstring* outErrorText,
         std::string* outResponseBody)
     {
+        static const std::string kEmptyApiKey;
+        const std::string& apiKey = useApiKey_ ? apiKey_ : kEmptyApiKey;
         HRESULT hr = SendJsonRequest(connection_, method, path, payload,
-            cookieHeader_, csrfToken_, response, outWin32Error, outErrorText, outResponseBody, this);
+            cookieHeader_, csrfToken_, apiKey, response, outWin32Error,
+            outErrorText, outResponseBody, this);
         if (FAILED(hr))
             return hr;
 
-        if (response && (response->status == 401 || response->status == 403))
+        if (!useApiKey_ && response && (response->status == 401 || response->status == 403))
         {
             ResetAuth();
             if (!EnsureLogin())
@@ -1282,7 +1318,7 @@ private:
             }
 
             hr = SendJsonRequest(connection_, method, path, payload,
-                cookieHeader_, csrfToken_, response, outWin32Error,
+                cookieHeader_, csrfToken_, apiKey, response, outWin32Error,
                 outErrorText, outResponseBody, this);
         }
 
@@ -1325,6 +1361,8 @@ private:
     bool loggedIn_ = false;
     std::wstring cookieHeader_;
     std::wstring csrfToken_;
+    std::string apiKey_;
+    bool useApiKey_ = false;
     bool configLoaded_ = false;
     bool callbackInstalled_ = false;
 
@@ -1375,6 +1413,7 @@ HRESULT SendJsonRequest(HINTERNET connection,
     const std::string& payload,
     const std::wstring& cookieHeader,
     const std::wstring& csrfToken,
+    const std::string& apiKey,
     HttpResponse* response,
     DWORD* outWin32Error,
     std::wstring* outErrorText,
@@ -1428,6 +1467,12 @@ HRESULT SendJsonRequest(HINTERNET connection,
     {
         headers += L"Cookie: ";
         headers += cookieHeader;
+        headers += L"\r\n";
+    }
+    if (!apiKey.empty())
+    {
+        headers += L"X-API-Key: ";
+        headers += Utf8ToWide(apiKey);
         headers += L"\r\n";
     }
 
