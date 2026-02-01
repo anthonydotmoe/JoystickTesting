@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <string>
 
 struct JoystickState
 {
@@ -12,3 +13,4 @@ struct JoystickState
 void StartNetworkWorker();
 void StopNetworkWorker();
 void SubmitJoystickState(const JoystickState& state);
+std::wstring GetNetworkStatusText();

@@ -24,6 +24,6 @@ BEGIN
     LTEXT           "0",IDC_Y_AXIS,63,67,21,8,WS_DISABLED
     LTEXT           "0",IDC_Z_AXIS,63,78,21,8,WS_DISABLED
     LTEXT           "",IDC_BUTTONS,54,137,120,8
-	LTEXT           "http response:", IDC_NetResponse_TEXT, 18, 167, 30, 8
+	LTEXT           "Network:", IDC_NetResponse_TEXT, 18, 167, 30, 8
 	LTEXT           "", IDC_NetResponse, 54, 167, 100, 8 
 END

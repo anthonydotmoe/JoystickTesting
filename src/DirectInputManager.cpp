@@ -185,6 +185,9 @@ HRESULT UpdateInputState(HWND hDlg)
     }
     SetWindowText(GetDlgItem(hDlg, IDC_BUTTONS), strText);
 
+    const std::wstring networkStatus = GetNetworkStatusText();
+    SetWindowText(GetDlgItem(hDlg, IDC_NetResponse), networkStatus.c_str());
+
     return S_OK;
 }
 

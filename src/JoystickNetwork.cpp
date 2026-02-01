@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cwchar>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -23,7 +24,6 @@ struct NetworkConfig
     std::wstring movePath = L"/proxy/protect/api/cameras/67a2bce203a1b203e4001891/move";
     std::string username;
     std::string password;
-    std::string siteName;
 };
 
 NetworkConfig& GetNetworkConfig()
@@ -111,7 +111,6 @@ bool LoadConfigFromRegistry(NetworkConfig& config)
     const std::wstring controllerAddress = ReadRegistryString(L"Controller Address");
     const std::wstring userName = ReadRegistryString(L"Username");
     const std::wstring password = ReadRegistryString(L"Password");
-    const std::wstring siteName = ReadRegistryString(L"Sitename");
 
     if (controllerAddress.empty() || userName.empty() || password.empty())
         return false;
@@ -119,7 +118,6 @@ bool LoadConfigFromRegistry(NetworkConfig& config)
     ApplyHostAndPort(config, controllerAddress);
     config.username = WideToUtf8(userName);
     config.password = WideToUtf8(password);
-    config.siteName = WideToUtf8(siteName);
     return true;
 }
 
@@ -213,15 +211,55 @@ std::vector<std::wstring> ReadSetCookieHeaders(HINTERNET request)
     return cookies;
 }
 
+std::wstring FormatWin32Error(DWORD error)
+{
+    if (error == 0)
+        return L"";
+
+    wchar_t* messageBuffer = nullptr;
+    const DWORD length = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        error,
+        0,
+        reinterpret_cast<LPWSTR>(&messageBuffer),
+        0,
+        nullptr);
+
+    if (length == 0 || !messageBuffer)
+        return L"";
+
+    std::wstring message(messageBuffer, length);
+    LocalFree(messageBuffer);
+
+    while (!message.empty())
+    {
+        const wchar_t ch = message.back();
+        if (ch == L'\r' || ch == L'\n')
+            message.pop_back();
+        else
+            break;
+    }
+
+    return message;
+}
+
 HRESULT SendJsonRequest(HINTERNET connection,
     const std::wstring& path,
     const std::string& payload,
     const std::wstring& cookieHeader,
     const std::wstring& csrfToken,
-    HttpResponse* response)
+    HttpResponse* response,
+    DWORD* outWin32Error,
+    std::wstring* outErrorText)
 {
     HRESULT hr = S_OK;
     DWORD bytesAvailable = 0;
+
+    if (outWin32Error)
+        *outWin32Error = 0;
+    if (outErrorText)
+        outErrorText->clear();
 
     HINTERNET hRequest = WinHttpOpenRequest(
         connection,
@@ -233,7 +271,14 @@ HRESULT SendJsonRequest(HINTERNET connection,
         WINHTTP_FLAG_SECURE);
 
     if (!hRequest)
+    {
+        const DWORD error = GetLastError();
+        if (outWin32Error)
+            *outWin32Error = error;
+        if (outErrorText)
+            *outErrorText = FormatWin32Error(error);
         return E_FAIL;
+    }
 
     std::wstring headers = L"Content-Type: application/json\r\n";
     if (!csrfToken.empty())
@@ -261,6 +306,11 @@ HRESULT SendJsonRequest(HINTERNET connection,
     if (!results)
     {
         hr = E_FAIL;
+        const DWORD error = GetLastError();
+        if (outWin32Error)
+            *outWin32Error = error;
+        if (outErrorText)
+            *outErrorText = FormatWin32Error(error);
         goto cleanup;
     }
 
@@ -268,6 +318,11 @@ HRESULT SendJsonRequest(HINTERNET connection,
     if (!results)
     {
         hr = E_FAIL;
+        const DWORD error = GetLastError();
+        if (outWin32Error)
+            *outWin32Error = error;
+        if (outErrorText)
+            *outErrorText = FormatWin32Error(error);
         goto cleanup;
     }
 
@@ -324,6 +379,7 @@ public:
             return;
         running_ = true;
         stopRequested_ = false;
+        SetStatus(L"Starting");
         worker_ = std::thread(&NetworkWorker::Run, this);
     }
 
@@ -344,6 +400,7 @@ public:
         hasState_ = false;
         CloseHandles();
         ResetAuth();
+        SetStatus(L"Stopped");
     }
 
     void Submit(const JoystickState& state)
@@ -354,6 +411,12 @@ public:
             hasState_ = true;
         }
         cv_.notify_all();
+    }
+
+    std::wstring GetStatus()
+    {
+        std::scoped_lock lock(statusMutex_);
+        return status_;
     }
 
 private:
@@ -382,11 +445,24 @@ private:
             if (EnsureLogin())
             {
                 HttpResponse response = {};
-                SendJsonRequest(connection_, GetNetworkConfig().movePath, payload,
-                    cookieHeader_, csrfToken_, &response);
+                DWORD error = 0;
+                std::wstring errorText;
+                const HRESULT hr = SendJsonRequest(connection_, GetNetworkConfig().movePath, payload,
+                    cookieHeader_, csrfToken_, &response, &error, &errorText);
+                if (FAILED(hr))
+                {
+                    SetStatusError(L"Move failed", error, errorText);
+                }
+                else
+                {
+                    SetStatusHttp(L"Move", response.status);
+                }
 
                 if (response.status == 401 || response.status == 403)
+                {
+                    SetStatusHttp(L"Unauthorized", response.status);
                     ResetAuth();
+                }
             }
 
             lock.lock();
@@ -425,19 +501,35 @@ private:
         }
 
         if (!configLoaded_)
+        {
+            SetStatus(L"Registry config missing");
             return false;
+        }
 
         if (config.username.empty() || config.password.empty())
+        {
+            SetStatus(L"Credentials missing");
             return false;
+        }
 
         EnsureSession();
         if (!session_ || !connection_)
+        {
+            SetStatus(L"Network init failed");
             return false;
+        }
 
         HttpResponse response = {};
         const std::string payload = BuildLoginPayload(config);
-        if (FAILED(SendJsonRequest(connection_, config.loginPath, payload, L"", L"", &response)))
+        SetStatus(L"Logging in");
+        DWORD error = 0;
+        std::wstring errorText;
+        if (FAILED(SendJsonRequest(connection_, config.loginPath, payload, L"", L"", &response,
+            &error, &errorText)))
+        {
+            SetStatusError(L"Login failed", error, errorText);
             return false;
+        }
 
         if (response.status >= 200 && response.status < 300)
         {
@@ -446,6 +538,14 @@ private:
             if (!response.csrfToken.empty())
                 csrfToken_ = response.csrfToken;
             loggedIn_ = !cookieHeader_.empty() || !csrfToken_.empty();
+            if (loggedIn_)
+                SetStatusHttp(L"Logged in", response.status);
+            else
+                SetStatusHttp(L"Login missing cookies", response.status);
+        }
+        else
+        {
+            SetStatusHttp(L"Login failed", response.status);
         }
 
         return loggedIn_;
@@ -487,6 +587,38 @@ private:
     std::wstring cookieHeader_;
     std::wstring csrfToken_;
     bool configLoaded_ = false;
+
+    std::mutex statusMutex_;
+    std::wstring status_ = L"Idle";
+
+    void SetStatusHttp(const wchar_t* prefix, DWORD status)
+    {
+        std::wstring message = prefix ? prefix : L"";
+        message += L" (HTTP ";
+        message += std::to_wstring(status);
+        message += L")";
+        SetStatus(message.c_str());
+    }
+
+    void SetStatusError(const wchar_t* prefix, DWORD error, const std::wstring& errorText)
+    {
+        std::wstring message = prefix ? prefix : L"";
+        message += L" (error ";
+        message += std::to_wstring(error);
+        if (!errorText.empty())
+        {
+            message += L": ";
+            message += errorText;
+        }
+        message += L")";
+        SetStatus(message.c_str());
+    }
+
+    void SetStatus(const wchar_t* text)
+    {
+        std::scoped_lock lock(statusMutex_);
+        status_ = text ? text : L"";
+    }
 };
 
 NetworkWorker& GetWorker()
@@ -509,4 +641,9 @@ void StopNetworkWorker()
 void SubmitJoystickState(const JoystickState& state)
 {
     GetWorker().Submit(state);
+}
+
+std::wstring GetNetworkStatusText()
+{
+    return GetWorker().GetStatus();
 }
