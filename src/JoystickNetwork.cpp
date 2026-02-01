@@ -28,8 +28,9 @@ struct NetworkConfig
     std::wstring host = L"192.168.3.251";
     INTERNET_PORT port = 443;
     std::wstring loginPath = L"/api/auth/login";
-    std::wstring cameraPath = L"/proxy/protect/api/cameras/67a2bce203a1b203e4001891";
-    std::wstring movePath = L"/proxy/protect/api/cameras/67a2bce203a1b203e4001891/move";
+    std::wstring cameraBasePath = L"/proxy/protect/api/cameras/";
+    std::wstring cameraMoveSuffix = L"/move";
+    std::wstring cameraListPath = L"/proxy/protect/integration/v1/cameras";
     std::string username;
     std::string password;
 };
@@ -262,6 +263,335 @@ bool TryParseReturnHomeDisabled(const std::string& body, bool* outDisabled)
     return TryParseReturnHomeDisabledFromRange(body, 0, body.size() - 1, outDisabled);
 }
 
+bool TryParseJsonString(const std::string& body,
+    size_t start,
+    size_t end,
+    size_t* outNext,
+    std::string* outValue)
+{
+    if (start > end || body[start] != '"')
+        return false;
+
+    std::string value;
+    bool escape = false;
+    for (size_t i = start + 1; i <= end; ++i)
+    {
+        const char ch = body[i];
+        if (escape)
+        {
+            switch (ch)
+            {
+                case '"': value.push_back('"'); break;
+                case '\\': value.push_back('\\'); break;
+                case '/': value.push_back('/'); break;
+                case 'b': value.push_back('\b'); break;
+                case 'f': value.push_back('\f'); break;
+                case 'n': value.push_back('\n'); break;
+                case 'r': value.push_back('\r'); break;
+                case 't': value.push_back('\t'); break;
+                case 'u':
+                {
+                    if (i + 4 > end)
+                        return false;
+                    unsigned int codePoint = 0;
+                    for (size_t j = 0; j < 4; ++j)
+                    {
+                        const char hex = body[i + 1 + j];
+                        codePoint <<= 4;
+                        if (hex >= '0' && hex <= '9')
+                            codePoint += static_cast<unsigned int>(hex - '0');
+                        else if (hex >= 'A' && hex <= 'F')
+                            codePoint += static_cast<unsigned int>(hex - 'A' + 10);
+                        else if (hex >= 'a' && hex <= 'f')
+                            codePoint += static_cast<unsigned int>(hex - 'a' + 10);
+                        else
+                            return false;
+                    }
+                    if (codePoint <= 0x7F)
+                        value.push_back(static_cast<char>(codePoint));
+                    else
+                        value.push_back('?');
+                    i += 4;
+                    break;
+                }
+                default:
+                    value.push_back(ch);
+                    break;
+            }
+            escape = false;
+            continue;
+        }
+
+        if (ch == '\\')
+        {
+            escape = true;
+            continue;
+        }
+
+        if (ch == '"')
+        {
+            if (outNext)
+                *outNext = i + 1;
+            if (outValue)
+                *outValue = value;
+            return true;
+        }
+
+        value.push_back(ch);
+    }
+
+    return false;
+}
+
+bool SkipJsonValue(const std::string& body, size_t start, size_t end, size_t* outNext)
+{
+    if (start > end)
+        return false;
+
+    const char first = body[start];
+    if (first == '"')
+        return TryParseJsonString(body, start, end, outNext, nullptr);
+
+    if (first == '{' || first == '[')
+    {
+        const char open = first;
+        const char close = (first == '{') ? '}' : ']';
+        int depth = 0;
+        bool inString = false;
+        bool escape = false;
+        for (size_t i = start; i <= end; ++i)
+        {
+            const char ch = body[i];
+            if (inString)
+            {
+                if (escape)
+                {
+                    escape = false;
+                }
+                else if (ch == '\\')
+                {
+                    escape = true;
+                }
+                else if (ch == '"')
+                {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (ch == open)
+            {
+                ++depth;
+                continue;
+            }
+
+            if (ch == close)
+            {
+                --depth;
+                if (depth == 0)
+                {
+                    if (outNext)
+                        *outNext = i + 1;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    size_t pos = start;
+    for (; pos <= end; ++pos)
+    {
+        const char ch = body[pos];
+        if (ch == ',' || ch == '}' || ch == ']')
+            break;
+    }
+
+    if (outNext)
+        *outNext = pos;
+    return true;
+}
+
+bool TryExtractNextJsonObjectRange(const std::string& body,
+    size_t searchStart,
+    size_t* outStart,
+    size_t* outEnd)
+{
+    bool inString = false;
+    bool escape = false;
+    int depth = 0;
+    size_t objectStart = std::string::npos;
+
+    for (size_t i = searchStart; i < body.size(); ++i)
+    {
+        const char ch = body[i];
+        if (inString)
+        {
+            if (escape)
+            {
+                escape = false;
+            }
+            else if (ch == '\\')
+            {
+                escape = true;
+            }
+            else if (ch == '"')
+            {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (ch == '"')
+        {
+            inString = true;
+            continue;
+        }
+
+        if (ch == '{')
+        {
+            if (depth == 0)
+                objectStart = i;
+            ++depth;
+            continue;
+        }
+
+        if (ch == '}')
+        {
+            if (depth == 0)
+                continue;
+            --depth;
+            if (depth == 0 && objectStart != std::string::npos)
+            {
+                if (outStart)
+                    *outStart = objectStart;
+                if (outEnd)
+                    *outEnd = i;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool TryParseCameraInfo(const std::string& body,
+    size_t start,
+    size_t end,
+    CameraInfo* outCamera)
+{
+    if (start >= body.size() || end >= body.size() || start >= end)
+        return false;
+
+    if (body[start] != '{')
+        return false;
+
+    size_t pos = start + 1;
+    std::string id;
+    std::string name;
+    std::string state;
+
+    while (pos <= end)
+    {
+        while (pos <= end && (std::isspace(static_cast<unsigned char>(body[pos])) || body[pos] == ','))
+            ++pos;
+
+        if (pos > end || body[pos] == '}')
+            break;
+
+        if (body[pos] != '"')
+        {
+            ++pos;
+            continue;
+        }
+
+        std::string key;
+        size_t nextPos = pos;
+        if (!TryParseJsonString(body, pos, end, &nextPos, &key))
+            return false;
+
+        pos = nextPos;
+        while (pos <= end && std::isspace(static_cast<unsigned char>(body[pos])))
+            ++pos;
+        if (pos > end || body[pos] != ':')
+            return false;
+        ++pos;
+        while (pos <= end && std::isspace(static_cast<unsigned char>(body[pos])))
+            ++pos;
+        if (pos > end)
+            return false;
+
+        if (key == "id" || key == "name" || key == "state")
+        {
+            if (body[pos] == '"')
+            {
+                std::string value;
+                if (!TryParseJsonString(body, pos, end, &nextPos, &value))
+                    return false;
+                if (key == "id")
+                    id = std::move(value);
+                else if (key == "name")
+                    name = std::move(value);
+                else if (key == "state")
+                    state = std::move(value);
+                pos = nextPos;
+            }
+            else
+            {
+                if (!SkipJsonValue(body, pos, end, &nextPos))
+                    return false;
+                pos = nextPos;
+            }
+        }
+        else
+        {
+            if (!SkipJsonValue(body, pos, end, &nextPos))
+                return false;
+            pos = nextPos;
+        }
+    }
+
+    if (id.empty())
+        return false;
+
+    if (outCamera)
+    {
+        outCamera->id = Utf8ToWide(id);
+        outCamera->name = Utf8ToWide(name.empty() ? id : name);
+        outCamera->state = Utf8ToWide(state);
+    }
+
+    return true;
+}
+
+bool TryParseCameraList(const std::string& body, std::vector<CameraInfo>* cameras)
+{
+    if (!cameras)
+        return false;
+
+    cameras->clear();
+
+    size_t searchStart = 0;
+    size_t objStart = 0;
+    size_t objEnd = 0;
+    while (TryExtractNextJsonObjectRange(body, searchStart, &objStart, &objEnd))
+    {
+        CameraInfo camera;
+        if (TryParseCameraInfo(body, objStart, objEnd, &camera))
+            cameras->push_back(std::move(camera));
+        searchStart = objEnd + 1;
+    }
+
+    return true;
+}
+
 struct HttpResponse
 {
     DWORD status = 0;
@@ -452,6 +782,7 @@ public:
         running_ = true;
         stopRequested_ = false;
         needsReturnHomeQuery_ = true;
+        needsCameraListRefresh_ = true;
         SetStatus(L"Starting");
         worker_ = std::thread(&NetworkWorker::Run, this);
     }
@@ -475,6 +806,10 @@ public:
         hasState_ = false;
         hasReturnHomeSetting_ = false;
         returnHomeStateKnown_ = false;
+        hasCameraListUpdate_ = false;
+        cameraList_.clear();
+        selectedCameraId_.clear();
+        needsCameraListRefresh_ = true;
         CloseHandles();
         ResetAuth();
         SetStatus(L"Stopped");
@@ -533,6 +868,36 @@ public:
         return DescribeSecureFailureFlags(lastSecureFailureFlags_);
     }
 
+    void RequestCameraListRefresh()
+    {
+        {
+            std::scoped_lock lock(mutex_);
+            needsCameraListRefresh_ = true;
+        }
+        cv_.notify_all();
+    }
+
+    bool ConsumeCameraListUpdate(std::vector<CameraInfo>* cameras)
+    {
+        std::scoped_lock lock(mutex_);
+        if (!hasCameraListUpdate_)
+            return false;
+        hasCameraListUpdate_ = false;
+        if (cameras)
+            *cameras = cameraList_;
+        return true;
+    }
+
+    void SetSelectedCameraId(const std::wstring& cameraId)
+    {
+        std::scoped_lock lock(mutex_);
+        if (selectedCameraId_ == cameraId)
+            return;
+        selectedCameraId_ = cameraId;
+        needsReturnHomeQuery_ = true;
+        returnHomeStateKnown_ = false;
+    }
+
 private:
     void Run()
     {
@@ -542,12 +907,13 @@ private:
         for (;;)
         {
             cv_.wait_until(lock, nextSend, [&]() {
-                return stopRequested_ || hasState_ || hasReturnHomeSetting_ || needsReturnHomeQuery_;
+                return stopRequested_ || hasState_ || hasReturnHomeSetting_ || needsReturnHomeQuery_ ||
+                    needsCameraListRefresh_;
             });
             if (stopRequested_)
                 break;
 
-            if (!hasState_ && !hasReturnHomeSetting_ && !needsReturnHomeQuery_)
+            if (!hasState_ && !hasReturnHomeSetting_ && !needsReturnHomeQuery_ && !needsCameraListRefresh_)
             {
                 nextSend = std::chrono::steady_clock::now() + kSendInterval;
                 continue;
@@ -556,6 +922,9 @@ private:
             const bool sendReturnHome = hasReturnHomeSetting_;
             const bool returnHomeDisabled = returnHomeDisabled_;
             hasReturnHomeSetting_ = false;
+            const bool refreshCameraList = needsCameraListRefresh_;
+            needsCameraListRefresh_ = false;
+            const std::wstring selectedCameraId = selectedCameraId_;
 
             JoystickState snapshot = latestState_;
             const bool sendMove = hasState_;
@@ -565,7 +934,17 @@ private:
             needsReturnHomeQuery_ = false;
             lock.unlock();
 
-            if (queryReturnHome)
+            const bool hasCameraSelection = !selectedCameraId.empty();
+            std::wstring cameraPath;
+            std::wstring movePath;
+            if (hasCameraSelection)
+            {
+                const NetworkConfig& config = GetNetworkConfig();
+                cameraPath = config.cameraBasePath + selectedCameraId;
+                movePath = cameraPath + config.cameraMoveSuffix;
+            }
+
+            if (refreshCameraList)
             {
                 if (EnsureLogin())
                 {
@@ -574,7 +953,54 @@ private:
                     std::wstring errorText;
                     std::string responseBody;
                     const HRESULT hr = SendJsonRequestWithReauth(L"GET",
-                        GetNetworkConfig().cameraPath, "",
+                        GetNetworkConfig().cameraListPath, "",
+                        &response, &error, &errorText, &responseBody);
+                    if (FAILED(hr))
+                    {
+                        SetStatusError(L"Camera list failed", error, errorText);
+                    }
+                    else
+                    {
+                        SetStatusHttp(L"Camera list", response.status);
+                        if (response.status >= 200 && response.status < 300)
+                        {
+                            std::vector<CameraInfo> cameras;
+                            if (TryParseCameraList(responseBody, &cameras))
+                            {
+                                AppendLogLine(L"Camera list parsed: " +
+                                    std::to_wstring(cameras.size()));
+                                std::scoped_lock listLock(mutex_);
+                                cameraList_ = std::move(cameras);
+                                hasCameraListUpdate_ = true;
+                            }
+                            else
+                            {
+                                AppendLogLine(L"Camera list parse failed");
+                            }
+                        }
+                    }
+                    if (response.status == 401 || response.status == 403)
+                    {
+                        SetStatusHttp(L"Unauthorized", response.status);
+                        ResetAuth();
+                    }
+                }
+            }
+
+            if (queryReturnHome)
+            {
+                if (!hasCameraSelection)
+                {
+                    SetStatus(L"No camera selected");
+                }
+                else if (EnsureLogin())
+                {
+                    HttpResponse response = {};
+                    DWORD error = 0;
+                    std::wstring errorText;
+                    std::string responseBody;
+                    const HRESULT hr = SendJsonRequestWithReauth(L"GET",
+                        cameraPath, "",
                         &response, &error, &errorText, &responseBody);
                     if (FAILED(hr))
                     {
@@ -617,14 +1043,18 @@ private:
 
             if (sendReturnHome)
             {
-                if (EnsureLogin())
+                if (!hasCameraSelection)
+                {
+                    SetStatus(L"No camera selected");
+                }
+                else if (EnsureLogin())
                 {
                     const std::string payload = BuildReturnHomePayload(returnHomeDisabled);
                     HttpResponse response = {};
                     DWORD error = 0;
                     std::wstring errorText;
                     const HRESULT hr = SendJsonRequestWithReauth(L"PATCH",
-                        GetNetworkConfig().cameraPath, payload,
+                        cameraPath, payload,
                         &response, &error, &errorText, nullptr);
                     if (FAILED(hr))
                     {
@@ -645,14 +1075,18 @@ private:
 
             if (sendMove)
             {
-                if (EnsureLogin())
+                if (!hasCameraSelection)
+                {
+                    SetStatus(L"No camera selected");
+                }
+                else if (EnsureLogin())
                 {
                     const std::string payload = BuildMovePayload(snapshot);
                     HttpResponse response = {};
                     DWORD error = 0;
                     std::wstring errorText;
                     const HRESULT hr = SendJsonRequestWithReauth(L"POST",
-                        GetNetworkConfig().movePath,
+                        movePath,
                         payload, &response, &error, &errorText, nullptr);
                     if (FAILED(hr))
                     {
@@ -774,10 +1208,20 @@ private:
         configLoaded_ = false;
         needsReturnHomeQuery_ = true;
         returnHomeStateKnown_ = false;
+        needsCameraListRefresh_ = true;
     }
 
     void SendReturnHomeOnStop()
     {
+        std::wstring cameraPath;
+        {
+            std::scoped_lock lock(mutex_);
+            if (selectedCameraId_.empty())
+                return;
+            const NetworkConfig& config = GetNetworkConfig();
+            cameraPath = config.cameraBasePath + selectedCameraId_;
+        }
+
         if (!EnsureLogin())
             return;
 
@@ -785,7 +1229,7 @@ private:
         HttpResponse response = {};
         DWORD error = 0;
         std::wstring errorText;
-        SendJsonRequestWithReauth(L"PATCH", GetNetworkConfig().cameraPath, payload,
+        SendJsonRequestWithReauth(L"PATCH", cameraPath, payload,
             &response, &error, &errorText, nullptr);
     }
 
@@ -847,6 +1291,10 @@ private:
     bool returnHomeDisabled_ = false;
     bool needsReturnHomeQuery_ = true;
     bool returnHomeStateKnown_ = false;
+    bool needsCameraListRefresh_ = true;
+    bool hasCameraListUpdate_ = false;
+    std::vector<CameraInfo> cameraList_;
+    std::wstring selectedCameraId_;
 
     HINTERNET session_ = nullptr;
     HINTERNET connection_ = nullptr;
@@ -1140,6 +1588,21 @@ bool ConsumeReturnHomeSettingUpdate(bool* disabled)
 std::wstring GetNetworkStatusText()
 {
     return GetWorker().GetStatus();
+}
+
+void RequestCameraListRefresh()
+{
+    GetWorker().RequestCameraListRefresh();
+}
+
+bool ConsumeCameraListUpdate(std::vector<CameraInfo>* cameras)
+{
+    return GetWorker().ConsumeCameraListUpdate(cameras);
+}
+
+void SelectCameraId(const std::wstring& cameraId)
+{
+    GetWorker().SetSelectedCameraId(cameraId);
 }
 
 bool GetInvertYSetting()

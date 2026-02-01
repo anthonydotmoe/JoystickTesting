@@ -11,6 +11,7 @@
 #include <tchar.h>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #pragma warning(push)
 #pragma warning(disable : 6000 28251 4996)
@@ -26,6 +27,9 @@ constexpr double kTwistDeadzone = 10.0;
 ComPtr<IDirectInput8> g_directInput;
 ComPtr<IDirectInputDevice8> g_joystick;
 bool g_filterOutXinputDevices = false;
+std::vector<CameraInfo> g_cameraList;
+std::vector<std::wstring> g_cameraComboIds;
+std::wstring g_lastSelectedCameraId;
 
 struct DI_ENUM_CONTEXT
 {
@@ -35,6 +39,10 @@ struct DI_ENUM_CONTEXT
 
 BOOL CALLBACK EnumObjectsCallback(const DIDEVICEOBJECTINSTANCE* pdidoi, VOID* pContext);
 BOOL CALLBACK EnumJoysticksCallback(const DIDEVICEINSTANCE* pdidInstance, VOID* pContext);
+
+std::wstring BuildCameraDisplayName(const CameraInfo& camera);
+void UpdateCameraListUI(HWND hDlg);
+void UpdateSelectedCamera(HWND hDlg);
 }
 
 void SetFilterOutXInputDevices(bool enable)
@@ -202,6 +210,9 @@ HRESULT UpdateInputState(HWND hDlg)
     const std::wstring networkStatus = GetNetworkStatusText();
     SetWindowText(GetDlgItem(hDlg, IDC_NetResponse), networkStatus.c_str());
 
+    UpdateCameraListUI(hDlg);
+    UpdateSelectedCamera(hDlg);
+
     bool returnHomeDisabled = false;
     if (ConsumeReturnHomeSettingUpdate(&returnHomeDisabled))
     {
@@ -213,6 +224,90 @@ HRESULT UpdateInputState(HWND hDlg)
 }
 
 namespace {
+std::wstring BuildCameraDisplayName(const CameraInfo& camera)
+{
+    std::wstring name = camera.name.empty() ? camera.id : camera.name;
+    if (!camera.state.empty())
+    {
+        name += L" (";
+        name += camera.state;
+        name += L")";
+    }
+    return name;
+}
+
+void UpdateCameraListUI(HWND hDlg)
+{
+    std::vector<CameraInfo> cameras;
+    if (!ConsumeCameraListUpdate(&cameras))
+        return;
+
+    g_cameraList = std::move(cameras);
+    g_cameraComboIds.clear();
+
+    HWND combo = GetDlgItem(hDlg, IDC_CAMERA_LIST);
+    if (!combo)
+        return;
+
+    SendMessage(combo, CB_RESETCONTENT, 0, 0);
+    SendMessage(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"<Select camera>"));
+    g_cameraComboIds.push_back(L"");
+
+    for (const auto& camera : g_cameraList)
+    {
+        const std::wstring displayName = BuildCameraDisplayName(camera);
+        SendMessage(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(displayName.c_str()));
+        g_cameraComboIds.push_back(camera.id);
+    }
+
+    int selectionIndex = 0;
+    if (!g_lastSelectedCameraId.empty())
+    {
+        for (size_t i = 0; i < g_cameraComboIds.size(); ++i)
+        {
+            if (g_cameraComboIds[i] == g_lastSelectedCameraId)
+            {
+                selectionIndex = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+
+    SendMessage(combo, CB_SETCURSEL, selectionIndex, 0);
+
+    const std::wstring newSelection =
+        (selectionIndex >= 0 && static_cast<size_t>(selectionIndex) < g_cameraComboIds.size())
+        ? g_cameraComboIds[selectionIndex]
+        : L"";
+    if (newSelection != g_lastSelectedCameraId)
+    {
+        g_lastSelectedCameraId = newSelection;
+        SelectCameraId(g_lastSelectedCameraId);
+    }
+}
+
+void UpdateSelectedCamera(HWND hDlg)
+{
+    HWND combo = GetDlgItem(hDlg, IDC_CAMERA_LIST);
+    if (!combo || g_cameraComboIds.empty())
+        return;
+
+    const int selectionIndex = static_cast<int>(SendMessage(combo, CB_GETCURSEL, 0, 0));
+    if (selectionIndex == CB_ERR ||
+        selectionIndex < 0 ||
+        static_cast<size_t>(selectionIndex) >= g_cameraComboIds.size())
+    {
+        return;
+    }
+
+    const std::wstring& cameraId = g_cameraComboIds[selectionIndex];
+    if (cameraId == g_lastSelectedCameraId)
+        return;
+
+    g_lastSelectedCameraId = cameraId;
+    SelectCameraId(cameraId);
+}
+
 BOOL CALLBACK EnumJoysticksCallback(const DIDEVICEINSTANCE* pdidInstance, VOID* pContext)
 {
     auto enumContext = reinterpret_cast<DI_ENUM_CONTEXT*>(pContext);

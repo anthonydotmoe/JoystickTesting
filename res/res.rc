@@ -26,6 +26,9 @@ BEGIN
     LTEXT           "",IDC_BUTTONS,54,137,120,8
     AUTOCHECKBOX    "Invert Y",IDC_INVERT_Y,200,56,55,10
     AUTOCHECKBOX    "Auto return home after inactivity",IDC_DISABLE_RETURN_HOME,200,69,130,10
+    LTEXT           "Camera:",IDC_STATIC,200,84,32,8
+    COMBOBOX        IDC_CAMERA_LIST,235,82,120,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Refresh",IDC_CAMERA_REFRESH,360,82,32,12
 	LTEXT           "Network:", IDC_NetResponse_TEXT, 18, 167, 30, 8
 	LTEXT           "", IDC_NetResponse, 54, 167, 332, 8 
 END

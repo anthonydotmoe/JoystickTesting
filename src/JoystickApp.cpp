@@ -73,6 +73,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
             CheckDlgButton(hDlg, IDC_INVERT_Y, GetInvertYSetting() ? BST_CHECKED : BST_UNCHECKED);
             StartNetworkWorker();
+            RequestCameraListRefresh();
             CheckDlgButton(hDlg, IDC_DISABLE_RETURN_HOME, BST_UNCHECKED);
             SetTimer(hDlg, 0, 1000 / 30, nullptr);
             return TRUE;
@@ -115,6 +116,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                             (IsDlgButtonChecked(hDlg, IDC_DISABLE_RETURN_HOME) == BST_CHECKED);
                         SubmitReturnHomeSetting(!enabled);
                     }
+                    return TRUE;
+                case IDC_CAMERA_REFRESH:
+                    if (HIWORD(wParam) == BN_CLICKED)
+                        RequestCameraListRefresh();
                     return TRUE;
             }
             break;
