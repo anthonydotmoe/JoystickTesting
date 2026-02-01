@@ -446,92 +446,100 @@ private:
             needsReturnHomeQuery_ = false;
             lock.unlock();
 
-            const bool loggedIn = EnsureLogin();
-            if (loggedIn && queryReturnHome)
+            if (queryReturnHome)
             {
-                HttpResponse response = {};
-                DWORD error = 0;
-                std::wstring errorText;
-                std::string responseBody;
-                const HRESULT hr = SendJsonRequest(connection_, L"GET",
-                    GetNetworkConfig().cameraPath, "",
-                    cookieHeader_, csrfToken_, &response, &error, &errorText, &responseBody, this);
-                if (FAILED(hr))
+                if (EnsureLogin())
                 {
-                    SetStatusError(L"Return home query failed", error, errorText);
-                }
-                else
-                {
-                    SetStatusHttp(L"Return home query", response.status);
-                    if (response.status >= 200 && response.status < 300)
+                    HttpResponse response = {};
+                    DWORD error = 0;
+                    std::wstring errorText;
+                    std::string responseBody;
+                    const HRESULT hr = SendJsonRequestWithReauth(L"GET",
+                        GetNetworkConfig().cameraPath, "",
+                        &response, &error, &errorText, &responseBody);
+                    if (FAILED(hr))
                     {
-                        bool disabled = false;
-                        if (TryParseReturnHomeDisabled(responseBody, &disabled))
+                        SetStatusError(L"Return home query failed", error, errorText);
+                    }
+                    else
+                    {
+                        SetStatusHttp(L"Return home query", response.status);
+                        if (response.status >= 200 && response.status < 300)
                         {
-                            std::scoped_lock stateLock(returnHomeStateMutex_);
-                            returnHomeDisabledState_ = disabled;
-                            hasReturnHomeSettingUpdate_ = true;
-                        }
-                        {
-                            std::scoped_lock stateLock(mutex_);
-                            returnHomeStateKnown_ = true;
+                            bool disabled = false;
+                            if (TryParseReturnHomeDisabled(responseBody, &disabled))
+                            {
+                                std::scoped_lock stateLock(returnHomeStateMutex_);
+                                returnHomeDisabledState_ = disabled;
+                                hasReturnHomeSettingUpdate_ = true;
+                            }
+                            {
+                                std::scoped_lock stateLock(mutex_);
+                                returnHomeStateKnown_ = true;
+                            }
                         }
                     }
-                }
-
-                if (response.status == 401 || response.status == 403)
-                {
-                    SetStatusHttp(L"Unauthorized", response.status);
-                    ResetAuth();
-                }
-            }
-
-            if (loggedIn && sendReturnHome)
-            {
-                const std::string payload = BuildReturnHomePayload(returnHomeDisabled);
-                HttpResponse response = {};
-                DWORD error = 0;
-                std::wstring errorText;
-                const HRESULT hr = SendJsonRequest(connection_, L"PATCH",
-                    GetNetworkConfig().cameraPath, payload,
-                    cookieHeader_, csrfToken_, &response, &error, &errorText, nullptr, this);
-                if (FAILED(hr))
-                {
-                    SetStatusError(L"Return home update failed", error, errorText);
-                }
-                else
-                {
-                    SetStatusHttp(L"Return home updated", response.status);
-                }
-
-                if (response.status == 401 || response.status == 403)
-                {
-                    SetStatusHttp(L"Unauthorized", response.status);
-                    ResetAuth();
+                    if (response.status == 401 || response.status == 403)
+                    {
+                        SetStatusHttp(L"Unauthorized", response.status);
+                        ResetAuth();
+                    }
                 }
             }
 
-            if (loggedIn && sendMove)
+            if (sendReturnHome)
             {
-                const std::string payload = BuildMovePayload(snapshot);
-                HttpResponse response = {};
-                DWORD error = 0;
-                std::wstring errorText;
-                const HRESULT hr = SendJsonRequest(connection_, L"POST", GetNetworkConfig().movePath,
-                    payload, cookieHeader_, csrfToken_, &response, &error, &errorText, nullptr, this);
-                if (FAILED(hr))
+                if (EnsureLogin())
                 {
-                    SetStatusError(L"Move failed", error, errorText);
-                }
-                else
-                {
-                    SetStatusHttp(L"Move", response.status);
-                }
+                    const std::string payload = BuildReturnHomePayload(returnHomeDisabled);
+                    HttpResponse response = {};
+                    DWORD error = 0;
+                    std::wstring errorText;
+                    const HRESULT hr = SendJsonRequestWithReauth(L"PATCH",
+                        GetNetworkConfig().cameraPath, payload,
+                        &response, &error, &errorText, nullptr);
+                    if (FAILED(hr))
+                    {
+                        SetStatusError(L"Return home update failed", error, errorText);
+                    }
+                    else
+                    {
+                        SetStatusHttp(L"Return home updated", response.status);
+                    }
 
-                if (response.status == 401 || response.status == 403)
+                    if (response.status == 401 || response.status == 403)
+                    {
+                        SetStatusHttp(L"Unauthorized", response.status);
+                        ResetAuth();
+                    }
+                }
+            }
+
+            if (sendMove)
+            {
+                if (EnsureLogin())
                 {
-                    SetStatusHttp(L"Unauthorized", response.status);
-                    ResetAuth();
+                    const std::string payload = BuildMovePayload(snapshot);
+                    HttpResponse response = {};
+                    DWORD error = 0;
+                    std::wstring errorText;
+                    const HRESULT hr = SendJsonRequestWithReauth(L"POST",
+                        GetNetworkConfig().movePath,
+                        payload, &response, &error, &errorText, nullptr);
+                    if (FAILED(hr))
+                    {
+                        SetStatusError(L"Move failed", error, errorText);
+                    }
+                    else
+                    {
+                        SetStatusHttp(L"Move", response.status);
+                    }
+
+                    if (response.status == 401 || response.status == 403)
+                    {
+                        SetStatusHttp(L"Unauthorized", response.status);
+                        ResetAuth();
+                    }
                 }
             }
 
@@ -649,8 +657,41 @@ private:
         HttpResponse response = {};
         DWORD error = 0;
         std::wstring errorText;
-        SendJsonRequest(connection_, L"PATCH", GetNetworkConfig().cameraPath, payload,
-            cookieHeader_, csrfToken_, &response, &error, &errorText, nullptr, this);
+        SendJsonRequestWithReauth(L"PATCH", GetNetworkConfig().cameraPath, payload,
+            &response, &error, &errorText, nullptr);
+    }
+
+    HRESULT SendJsonRequestWithReauth(const wchar_t* method,
+        const std::wstring& path,
+        const std::string& payload,
+        HttpResponse* response,
+        DWORD* outWin32Error,
+        std::wstring* outErrorText,
+        std::string* outResponseBody)
+    {
+        HRESULT hr = SendJsonRequest(connection_, method, path, payload,
+            cookieHeader_, csrfToken_, response, outWin32Error, outErrorText, outResponseBody, this);
+        if (FAILED(hr))
+            return hr;
+
+        if (response && (response->status == 401 || response->status == 403))
+        {
+            ResetAuth();
+            if (!EnsureLogin())
+            {
+                if (outWin32Error)
+                    *outWin32Error = 0;
+                if (outErrorText)
+                    *outErrorText = L"Re-login failed";
+                return E_FAIL;
+            }
+
+            hr = SendJsonRequest(connection_, method, path, payload,
+                cookieHeader_, csrfToken_, response, outWin32Error,
+                outErrorText, outResponseBody, this);
+        }
+
+        return hr;
     }
 
     void CloseHandles()
