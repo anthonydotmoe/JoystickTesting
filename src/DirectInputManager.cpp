@@ -9,6 +9,7 @@
 #include "res.h"
 
 #include <tchar.h>
+#include <algorithm>
 #include <cmath>
 
 #pragma warning(push)
@@ -19,6 +20,8 @@
 
 namespace {
 constexpr double kDeadzoneMagnitude = 20.0; // Raw axis magnitude threshold.
+constexpr double kAxisMaxMagnitude = 255.0;
+constexpr double kOutputMaxMagnitude = 750.0;
 ComPtr<IDirectInput8> g_directInput;
 ComPtr<IDirectInputDevice8> g_joystick;
 bool g_filterOutXinputDevices = false;
@@ -136,6 +139,7 @@ HRESULT UpdateInputState(HWND hDlg)
     const double y = static_cast<double>(js.lY);
     const double z = static_cast<double>(js.lZ);
     const double magnitude = std::sqrt((x * x) + (y * y) + (z * z));
+    const double maxMagnitude = kAxisMaxMagnitude;
     double displayX = 0.0;
     double displayY = 0.0;
     double displayZ = 0.0;
@@ -143,9 +147,16 @@ HRESULT UpdateInputState(HWND hDlg)
     if (magnitude >= kDeadzoneMagnitude && magnitude > 0.0)
     {
         const double invMagnitude = 1.0 / magnitude;
-        displayX = x * invMagnitude;
-        displayY = y * invMagnitude;
-        displayZ = z * invMagnitude;
+        const double scaledMagnitude = std::clamp(
+            (magnitude - kDeadzoneMagnitude) / (maxMagnitude - kDeadzoneMagnitude),
+            0.0,
+            1.0);
+        const double outputScale = scaledMagnitude * kOutputMaxMagnitude;
+
+        displayX = x * invMagnitude * outputScale;
+        const double ySign = (IsDlgButtonChecked(hDlg, IDC_INVERT_Y) == BST_CHECKED) ? -1.0 : 1.0;
+        displayY = y * invMagnitude * outputScale * ySign;
+        displayZ = z * invMagnitude * outputScale;
         JoystickState state = {};
         state.x = displayX;
         state.y = displayY;
