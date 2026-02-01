@@ -8,6 +8,7 @@
 #include "ComPtr.h"
 
 #include <wbemidl.h>
+#include <new>
 #include <wchar.h>
 
 namespace {
@@ -18,6 +19,38 @@ struct XINPUT_DEVICE_NODE
 };
 
 XINPUT_DEVICE_NODE* g_xinputDeviceList = nullptr;
+
+bool TryGetVidPid(const wchar_t* deviceId, DWORD* outVidPid)
+{
+    if (!deviceId || !wcsstr(deviceId, L"IG_"))
+        return false;
+
+    DWORD vid = 0;
+    DWORD pid = 0;
+
+    const wchar_t* strVid = wcsstr(deviceId, L"VID_");
+    if (strVid && swscanf(strVid, L"VID_%4X", &vid) != 1)
+        vid = 0;
+
+    const wchar_t* strPid = wcsstr(deviceId, L"PID_");
+    if (strPid && swscanf(strPid, L"PID_%4X", &pid) != 1)
+        pid = 0;
+
+    if (outVidPid)
+        *outVidPid = MAKELONG(vid, pid);
+    return true;
+}
+
+void AddXInputDevice(DWORD vidPid)
+{
+    XINPUT_DEVICE_NODE* newNode = new (std::nothrow) XINPUT_DEVICE_NODE;
+    if (!newNode)
+        return;
+
+    newNode->dwVidPid = vidPid;
+    newNode->pNext = g_xinputDeviceList;
+    g_xinputDeviceList = newNode;
+}
 }
 
 HRESULT SetupForIsXInputDevice()
@@ -76,29 +109,18 @@ HRESULT SetupForIsXInputDevice()
 
             ScopedVariant var;
             hr = device->Get(deviceId.get(), 0L, var.get(), nullptr, nullptr);
-            if (SUCCEEDED(hr) && var.value().vt == VT_BSTR && var.value().bstrVal != nullptr)
-            {
-                if (wcsstr(var.value().bstrVal, L"IG_"))
-                {
-                    DWORD pid = 0, vid = 0;
-                    WCHAR* strVid = wcsstr(var.value().bstrVal, L"VID_");
-                    if (strVid && swscanf(strVid, L"VID_%4X", &vid) != 1)
-                        vid = 0;
-                    WCHAR* strPid = wcsstr(var.value().bstrVal, L"PID_");
-                    if (strPid && swscanf(strPid, L"PID_%4X", &pid) != 1)
-                        pid = 0;
+            if (FAILED(hr))
+                continue;
 
-                    DWORD vidPid = MAKELONG(vid, pid);
+            const VARIANT& value = var.value();
+            if (value.vt != VT_BSTR || !value.bstrVal)
+                continue;
 
-                    XINPUT_DEVICE_NODE* newNode = new XINPUT_DEVICE_NODE;
-                    if (newNode)
-                    {
-                        newNode->dwVidPid = vidPid;
-                        newNode->pNext = g_xinputDeviceList;
-                        g_xinputDeviceList = newNode;
-                    }
-                }
-            }
+            DWORD vidPid = 0;
+            if (!TryGetVidPid(value.bstrVal, &vidPid))
+                continue;
+
+            AddXInputDevice(vidPid);
         }
     }
 
@@ -107,6 +129,9 @@ HRESULT SetupForIsXInputDevice()
 
 bool IsXInputDevice(const GUID* productGuid)
 {
+    if (!productGuid)
+        return false;
+
     XINPUT_DEVICE_NODE* node = g_xinputDeviceList;
     while (node)
     {

@@ -34,6 +34,31 @@ struct DI_ENUM_CONTEXT
     bool preferredJoyCfgValid;
 };
 
+struct DI_OBJECT_ENUM_CONTEXT
+{
+    HWND dialog;
+    int sliderCount = 0;
+    int povCount = 0;
+};
+
+class ScopedXInputDeviceCleanup
+{
+public:
+    explicit ScopedXInputDeviceCleanup(bool enabled)
+        : enabled_(enabled)
+    {
+    }
+
+    ~ScopedXInputDeviceCleanup()
+    {
+        if (enabled_)
+            CleanupForIsXInputDevice();
+    }
+
+private:
+    bool enabled_ = false;
+};
+
 BOOL CALLBACK EnumObjectsCallback(const DIDEVICEOBJECTINSTANCE* pdidoi, VOID* pContext);
 BOOL CALLBACK EnumJoysticksCallback(const DIDEVICEINSTANCE* pdidInstance, VOID* pContext);
 
@@ -60,8 +85,9 @@ HRESULT InitDirectInput(HWND hDlg)
     if (FAILED(hr))
         return hr;
 
+    ScopedXInputDeviceCleanup xinputCleanup(g_filterOutXinputDevices);
     if (g_filterOutXinputDevices)
-        SetupForIsXInputDevice();
+        (void)SetupForIsXInputDevice();
 
     DIJOYCONFIG preferredJoyCfg = {};
     DI_ENUM_CONTEXT enumContext = {};
@@ -83,9 +109,6 @@ HRESULT InitDirectInput(HWND hDlg)
     if (FAILED(hr))
         return hr;
 
-    if (g_filterOutXinputDevices)
-        CleanupForIsXInputDevice();
-
     if (!g_joystick)
     {
         MessageBox(nullptr, TEXT("Joystick not found. The sample will now exit."),
@@ -102,7 +125,9 @@ HRESULT InitDirectInput(HWND hDlg)
     if (FAILED(hr))
         return hr;
 
-    hr = g_joystick->EnumObjects(EnumObjectsCallback, reinterpret_cast<VOID*>(hDlg), DIDFT_ALL);
+    DI_OBJECT_ENUM_CONTEXT objectContext = {};
+    objectContext.dialog = hDlg;
+    hr = g_joystick->EnumObjects(EnumObjectsCallback, &objectContext, DIDFT_ALL);
     if (FAILED(hr))
         return hr;
 
@@ -152,7 +177,19 @@ HRESULT UpdateInputState(HWND hDlg)
     double displayY = 0.0;
     double displayZ = 0.0;
 
-    if (magnitude >= kDeadzoneMagnitude && magnitude > 0.0)
+    if (magnitude < kDeadzoneMagnitude || magnitude <= 0.0)
+    {
+        if (wasActive)
+        {
+            JoystickState neutral = {};
+            neutral.x = 0.0;
+            neutral.y = 0.0;
+            neutral.z = 0.0;
+            SubmitJoystickState(neutral);
+        }
+        wasActive = false;
+    }
+    else
     {
         const double invMagnitude = 1.0 / magnitude;
         const double scaledMagnitude = std::clamp(
@@ -172,18 +209,6 @@ HRESULT UpdateInputState(HWND hDlg)
         SubmitJoystickState(state);
         wasActive = true;
     }
-    else
-    {
-        if (wasActive)
-        {
-            JoystickState neutral = {};
-            neutral.x = 0.0;
-            neutral.y = 0.0;
-            neutral.z = 0.0;
-            SubmitJoystickState(neutral);
-        }
-        wasActive = false;
-    }
 
     _stprintf_s(strText, 512, TEXT("%.0f"), displayX);
     SetWindowText(GetDlgItem(hDlg, IDC_X_AXIS), strText);
@@ -193,7 +218,7 @@ HRESULT UpdateInputState(HWND hDlg)
     SetWindowText(GetDlgItem(hDlg, IDC_Z_AXIS), strText);
 
     _tcscpy_s(strText, 512, TEXT(""));
-    for (int i = 0; i < 128; i++)
+    for (int i = 0; i < 128; ++i)
     {
         if (js.rgbButtons[i] & 0x80)
         {
@@ -325,10 +350,11 @@ BOOL CALLBACK EnumJoysticksCallback(const DIDEVICEINSTANCE* pdidInstance, VOID* 
 
 BOOL CALLBACK EnumObjectsCallback(const DIDEVICEOBJECTINSTANCE* pdidoi, VOID* pContext)
 {
-    HWND hDlg = reinterpret_cast<HWND>(pContext);
+    auto* enumContext = reinterpret_cast<DI_OBJECT_ENUM_CONTEXT*>(pContext);
+    if (!enumContext)
+        return DIENUM_STOP;
 
-    static int sliderCount = 0;
-    static int povCount = 0;
+    HWND hDlg = enumContext->dialog;
 
     if (pdidoi->dwType & DIDFT_AXIS)
     {
@@ -376,7 +402,7 @@ BOOL CALLBACK EnumObjectsCallback(const DIDEVICEOBJECTINSTANCE* pdidoi, VOID* pC
     }
     if (pdidoi->guidType == GUID_Slider)
     {
-        switch (sliderCount++)
+        switch (enumContext->sliderCount++)
         {
             case 0:
                 EnableWindow(GetDlgItem(hDlg, IDC_SLIDER0), TRUE);
@@ -392,7 +418,7 @@ BOOL CALLBACK EnumObjectsCallback(const DIDEVICEOBJECTINSTANCE* pdidoi, VOID* pC
 
     if (pdidoi->guidType == GUID_POV)
     {
-        switch (povCount++)
+        switch (enumContext->povCount++)
         {
             case 0:
                 EnableWindow(GetDlgItem(hDlg, IDC_POV0), TRUE);

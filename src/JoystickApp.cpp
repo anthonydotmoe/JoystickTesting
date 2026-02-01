@@ -78,23 +78,18 @@ bool SaveSettingsDialog(HWND hDlg)
         return false;
     }
 
-    if (useApiKey)
+    if (useApiKey && apiKey.empty())
     {
-        if (apiKey.empty())
-        {
-            MessageBox(hDlg, TEXT("API key is required when enabled."),
-                TEXT("Settings"), MB_ICONERROR | MB_OK);
-            return false;
-        }
+        MessageBox(hDlg, TEXT("API key is required when enabled."),
+            TEXT("Settings"), MB_ICONERROR | MB_OK);
+        return false;
     }
-    else
+
+    if (!useApiKey && (username.empty() || password.empty()))
     {
-        if (username.empty() || password.empty())
-        {
-            MessageBox(hDlg, TEXT("Username and password are required."),
-                TEXT("Settings"), MB_ICONERROR | MB_OK);
-            return false;
-        }
+        MessageBox(hDlg, TEXT("Username and password are required."),
+            TEXT("Settings"), MB_ICONERROR | MB_OK);
+        return false;
     }
 
     const bool saved =
@@ -192,8 +187,9 @@ INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
                         EndDialog(hDlg, IDOK);
                     return TRUE;
                 case IDC_SETTINGS_USE_API_KEY:
-                    if (HIWORD(wParam) == BN_CLICKED)
-                        UpdateSettingsAuthControls(hDlg);
+                    if (HIWORD(wParam) != BN_CLICKED)
+                        return TRUE;
+                    UpdateSettingsAuthControls(hDlg);
                     return TRUE;
                 case IDCANCEL:
                     EndDialog(hDlg, IDCANCEL);
@@ -227,10 +223,9 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
             return TRUE;
 
         case WM_ACTIVATE:
-            if (WA_INACTIVE != wParam)
-            {
-                AcquireJoystick();
-            }
+            if (WA_INACTIVE == wParam)
+                return TRUE;
+            AcquireJoystick();
             return TRUE;
 
         case WM_TIMER:
@@ -251,31 +246,27 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                     EndDialog(hDlg, 0);
                     return TRUE;
                 case IDC_INVERT_Y:
-                    if (HIWORD(wParam) == BN_CLICKED)
-                    {
-                        const bool enabled = (IsDlgButtonChecked(hDlg, IDC_INVERT_Y) == BST_CHECKED);
-                        SetInvertYSetting(enabled);
-                    }
+                    if (HIWORD(wParam) != BN_CLICKED)
+                        return TRUE;
+                    SetInvertYSetting(IsDlgButtonChecked(hDlg, IDC_INVERT_Y) == BST_CHECKED);
                     return TRUE;
                 case IDC_DISABLE_RETURN_HOME:
-                    if (HIWORD(wParam) == BN_CLICKED)
-                    {
-                        const bool enabled =
-                            (IsDlgButtonChecked(hDlg, IDC_DISABLE_RETURN_HOME) == BST_CHECKED);
-                        SubmitReturnHomeSetting(!enabled);
-                    }
+                    if (HIWORD(wParam) != BN_CLICKED)
+                        return TRUE;
+                    SubmitReturnHomeSetting(
+                        IsDlgButtonChecked(hDlg, IDC_DISABLE_RETURN_HOME) != BST_CHECKED);
                     return TRUE;
                 case IDC_CAMERA_REFRESH:
-                    if (HIWORD(wParam) == BN_CLICKED)
-                        RequestCameraListRefresh();
+                    if (HIWORD(wParam) != BN_CLICKED)
+                        return TRUE;
+                    RequestCameraListRefresh();
                     return TRUE;
                 case IDC_SETTINGS_BUTTON:
-                    if (HIWORD(wParam) == BN_CLICKED)
-                    {
-                        HINSTANCE instance = reinterpret_cast<HINSTANCE>(
-                            GetWindowLongPtr(hDlg, GWLP_HINSTANCE));
-                        DialogBox(instance, MAKEINTRESOURCE(IDD_SETTINGS), hDlg, SettingsDlgProc);
-                    }
+                    if (HIWORD(wParam) != BN_CLICKED)
+                        return TRUE;
+                    HINSTANCE instance = reinterpret_cast<HINSTANCE>(
+                        GetWindowLongPtr(hDlg, GWLP_HINSTANCE));
+                    DialogBox(instance, MAKEINTRESOURCE(IDD_SETTINGS), hDlg, SettingsDlgProc);
                     return TRUE;
             }
             break;
