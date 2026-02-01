@@ -111,9 +111,9 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                 case IDC_DISABLE_RETURN_HOME:
                     if (HIWORD(wParam) == BN_CLICKED)
                     {
-                        const bool disabled =
+                        const bool enabled =
                             (IsDlgButtonChecked(hDlg, IDC_DISABLE_RETURN_HOME) == BST_CHECKED);
-                        SubmitReturnHomeSetting(disabled);
+                        SubmitReturnHomeSetting(!enabled);
                     }
                     return TRUE;
             }

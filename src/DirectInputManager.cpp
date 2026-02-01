@@ -206,7 +206,7 @@ HRESULT UpdateInputState(HWND hDlg)
     if (ConsumeReturnHomeSettingUpdate(&returnHomeDisabled))
     {
         CheckDlgButton(hDlg, IDC_DISABLE_RETURN_HOME,
-            returnHomeDisabled ? BST_CHECKED : BST_UNCHECKED);
+            returnHomeDisabled ? BST_UNCHECKED : BST_CHECKED);
     }
 
     return S_OK;

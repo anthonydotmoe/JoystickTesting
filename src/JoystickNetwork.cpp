@@ -109,9 +109,11 @@ std::string BuildReturnHomePayload(bool disabled)
         std::to_string(kReturnHomeAfterInactivityMs) + "}}";
 }
 
-bool TryParseReturnHomeDisabled(const std::string& body, bool* outDisabled)
+bool TryExtractJsonObjectRange(const std::string& body,
+    const std::string& key,
+    size_t* outStart,
+    size_t* outEnd)
 {
-    const std::string key = "\"returnHomeAfterInactivityMs\"";
     size_t pos = body.find(key);
     if (pos == std::string::npos)
         return false;
@@ -124,22 +126,140 @@ bool TryParseReturnHomeDisabled(const std::string& body, bool* outDisabled)
     while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])))
         ++pos;
 
-    if (body.compare(pos, 4, "null") == 0)
+    if (pos >= body.size() || body[pos] != '{')
+        return false;
+
+    bool inString = false;
+    bool escape = false;
+    int depth = 0;
+    for (size_t i = pos; i < body.size(); ++i)
+    {
+        const char ch = body[i];
+        if (inString)
+        {
+            if (escape)
+            {
+                escape = false;
+            }
+            else if (ch == '\\')
+            {
+                escape = true;
+            }
+            else if (ch == '"')
+            {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (ch == '"')
+        {
+            inString = true;
+            continue;
+        }
+
+        if (ch == '{')
+        {
+            if (depth == 0 && outStart)
+                *outStart = i;
+            ++depth;
+            continue;
+        }
+
+        if (ch == '}')
+        {
+            --depth;
+            if (depth == 0)
+            {
+                if (outEnd)
+                    *outEnd = i;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool TryParseReturnHomeDisabledFromRange(const std::string& body,
+    size_t start,
+    size_t end,
+    bool* outDisabled)
+{
+    if (start >= body.size() || end <= start || end >= body.size())
+        return false;
+
+    const std::string_view view(body.data() + start, end - start + 1);
+    const std::string key = "\"returnHomeAfterInactivityMs\"";
+    size_t pos = view.find(key);
+    if (pos == std::string::npos)
+        return false;
+
+    pos = view.find(':', pos + key.size());
+    if (pos == std::string::npos)
+        return false;
+
+    ++pos;
+    while (pos < view.size() && std::isspace(static_cast<unsigned char>(view[pos])))
+        ++pos;
+
+    if (pos >= view.size())
+        return false;
+
+    if (view.compare(pos, 4, "null") == 0 || view.compare(pos, 4, "NULL") == 0)
     {
         if (outDisabled)
             *outDisabled = true;
         return true;
     }
 
-    const char* start = body.c_str() + pos;
-    char* end = nullptr;
-    std::strtol(start, &end, 10);
-    if (end == start)
+    if (view[pos] == '"')
+    {
+        ++pos;
+        const size_t endQuote = view.find('"', pos);
+        if (endQuote == std::string::npos)
+            return false;
+
+        const std::string value(view.substr(pos, endQuote - pos));
+        if (value == "null" || value == "NULL")
+        {
+            if (outDisabled)
+                *outDisabled = true;
+            return true;
+        }
+
+        char* endPtr = nullptr;
+        const long long parsed = std::strtoll(value.c_str(), &endPtr, 10);
+        if (endPtr == value.c_str() || *endPtr != '\0')
+            return false;
+
+        if (outDisabled)
+            *outDisabled = (parsed <= 0);
+        return true;
+    }
+
+    const char* startPtr = view.data() + pos;
+    char* endPtr = nullptr;
+    const long long parsed = std::strtoll(startPtr, &endPtr, 10);
+    if (endPtr == startPtr)
         return false;
 
     if (outDisabled)
-        *outDisabled = false;
+        *outDisabled = (parsed <= 0);
     return true;
+}
+
+bool TryParseReturnHomeDisabled(const std::string& body, bool* outDisabled)
+{
+    size_t start = 0;
+    size_t end = 0;
+    if (TryExtractJsonObjectRange(body, "\"ptz\"", &start, &end))
+    {
+        if (TryParseReturnHomeDisabledFromRange(body, start, end, outDisabled))
+            return true;
+    }
+
+    return TryParseReturnHomeDisabledFromRange(body, 0, body.size() - 1, outDisabled);
 }
 
 struct HttpResponse
@@ -466,12 +586,21 @@ private:
                         if (response.status >= 200 && response.status < 300)
                         {
                             bool disabled = false;
-                            if (TryParseReturnHomeDisabled(responseBody, &disabled))
+                            const bool parsed = TryParseReturnHomeDisabled(responseBody, &disabled);
+                            if (parsed)
                             {
+                                std::wstring parsedLine = L"Return home parsed: ";
+                                parsedLine += disabled ? L"disabled" : L"enabled";
+                                AppendLogLine(parsedLine);
                                 std::scoped_lock stateLock(returnHomeStateMutex_);
                                 returnHomeDisabledState_ = disabled;
                                 hasReturnHomeSettingUpdate_ = true;
                             }
+                            else
+                            {
+                                AppendLogLine(L"Return home parse failed");
+                            }
+                            if (parsed)
                             {
                                 std::scoped_lock stateLock(mutex_);
                                 returnHomeStateKnown_ = true;
