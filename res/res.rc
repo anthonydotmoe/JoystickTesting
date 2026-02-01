@@ -7,13 +7,13 @@ CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "application.manifest"
 
 IDI_MAIN                ICON    DISCARDABLE     "icon.ico"
 
-IDD_JOYST_IMM DIALOG DISCARDABLE  0, 0, 250, 200
+IDD_JOYST_IMM DIALOG DISCARDABLE  0, 0, 400, 263
 STYLE DS_MODALFRAME | DS_CENTER | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | 
     WS_SYSMENU
 CAPTION "Comptoster_Direct_Input_Joystick_poster"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    DEFPUSHBUTTON   "E&xit",IDCANCEL,156,161,27,14
+    DEFPUSHBUTTON   "E&xit",IDCANCEL,128,68,27,14
     LTEXT           "This code samples joystick then sends post request based upon direction.",IDC_STATIC,7,7,153,8
     LTEXT           "X Axis:",IDC_X_AXIS_TEXT,25,56,22,8,WS_DISABLED
     LTEXT           "Y Axis:",IDC_Y_AXIS_TEXT,25,67,22,8,WS_DISABLED
@@ -24,6 +24,7 @@ BEGIN
     LTEXT           "0",IDC_Y_AXIS,63,67,21,8,WS_DISABLED
     LTEXT           "0",IDC_Z_AXIS,63,78,21,8,WS_DISABLED
     LTEXT           "",IDC_BUTTONS,54,137,120,8
+    AUTOCHECKBOX    "Invert Y",IDC_INVERT_Y,200,56,55,10
 	LTEXT           "Network:", IDC_NetResponse_TEXT, 18, 167, 30, 8
-	LTEXT           "", IDC_NetResponse, 54, 167, 100, 8 
+	LTEXT           "", IDC_NetResponse, 54, 167, 332, 8 
 END
