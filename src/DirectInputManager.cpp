@@ -9,6 +9,7 @@
 #include "res.h"
 
 #include <tchar.h>
+#include <cmath>
 
 #pragma warning(push)
 #pragma warning(disable : 6000 28251 4996)
@@ -17,6 +18,7 @@
 #pragma warning(pop)
 
 namespace {
+constexpr double kDeadzoneMagnitude = 20.0; // Raw axis magnitude threshold.
 ComPtr<IDirectInput8> g_directInput;
 ComPtr<IDirectInputDevice8> g_joystick;
 bool g_filterOutXinputDevices = false;
@@ -112,6 +114,7 @@ HRESULT UpdateInputState(HWND hDlg)
     HRESULT hr = S_OK;
     TCHAR strText[512] = {};
     DIJOYSTATE2 js = {};
+    static bool wasActive = false;
 
     if (!g_joystick)
         return S_OK;
@@ -129,13 +132,46 @@ HRESULT UpdateInputState(HWND hDlg)
     if (FAILED(hr))
         return hr;
 
-    _stprintf_s(strText, 512, TEXT("%ld"), js.lX);
+    const double x = static_cast<double>(js.lX);
+    const double y = static_cast<double>(js.lY);
+    const double z = static_cast<double>(js.lZ);
+    const double magnitude = std::sqrt((x * x) + (y * y) + (z * z));
+    double displayX = 0.0;
+    double displayY = 0.0;
+    double displayZ = 0.0;
+
+    if (magnitude >= kDeadzoneMagnitude && magnitude > 0.0)
+    {
+        const double invMagnitude = 1.0 / magnitude;
+        displayX = x * invMagnitude;
+        displayY = y * invMagnitude;
+        displayZ = z * invMagnitude;
+        JoystickState state = {};
+        state.x = displayX;
+        state.y = displayY;
+        state.z = displayZ;
+        SubmitJoystickState(state);
+        wasActive = true;
+    }
+    else
+    {
+        if (wasActive)
+        {
+            JoystickState neutral = {};
+            neutral.x = 0.0;
+            neutral.y = 0.0;
+            neutral.z = 0.0;
+            SubmitJoystickState(neutral);
+        }
+        wasActive = false;
+    }
+
+    _stprintf_s(strText, 512, TEXT("%.3f"), displayX);
     SetWindowText(GetDlgItem(hDlg, IDC_X_AXIS), strText);
-    _stprintf_s(strText, 512, TEXT("%ld"), js.lY);
+    _stprintf_s(strText, 512, TEXT("%.3f"), displayY);
     SetWindowText(GetDlgItem(hDlg, IDC_Y_AXIS), strText);
-    _stprintf_s(strText, 512, TEXT("%ld"), js.lZ);
+    _stprintf_s(strText, 512, TEXT("%.3f"), displayZ);
     SetWindowText(GetDlgItem(hDlg, IDC_Z_AXIS), strText);
-    _stprintf_s(strText, 512, TEXT("%ld"), js.lRx);
 
     _tcscpy_s(strText, 512, TEXT(""));
     for (int i = 0; i < 128; i++)
@@ -148,12 +184,6 @@ HRESULT UpdateInputState(HWND hDlg)
         }
     }
     SetWindowText(GetDlgItem(hDlg, IDC_BUTTONS), strText);
-
-    JoystickState state = {};
-    state.x = js.lX;
-    state.y = js.lY;
-    state.z = js.lZ;
-    SubmitJoystickState(state);
 
     return S_OK;
 }

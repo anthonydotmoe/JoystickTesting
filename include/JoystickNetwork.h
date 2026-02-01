@@ -4,9 +4,9 @@
 
 struct JoystickState
 {
-    LONG x;
-    LONG y;
-    LONG z;
+    double x;
+    double y;
+    double z;
 };
 
 void StartNetworkWorker();
