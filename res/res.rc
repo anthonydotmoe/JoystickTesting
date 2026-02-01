@@ -25,6 +25,7 @@ BEGIN
     LTEXT           "0",IDC_Z_AXIS,63,78,21,8,WS_DISABLED
     LTEXT           "",IDC_BUTTONS,54,137,120,8
     AUTOCHECKBOX    "Invert Y",IDC_INVERT_Y,200,56,55,10
+    AUTOCHECKBOX    "Disable return home (60s)",IDC_DISABLE_RETURN_HOME,200,69,130,10
 	LTEXT           "Network:", IDC_NetResponse_TEXT, 18, 167, 30, 8
 	LTEXT           "", IDC_NetResponse, 54, 167, 332, 8 
 END

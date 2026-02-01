@@ -8,7 +8,7 @@ set(INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 
 set(RESOURCE_FILE ${RESOURCE_DIR}/res.rc)
 
-file(GLOB SOURCE_FILES ${SOURCE_DIR}/*.cpp)
+file(GLOB SOURCE_FILES CONFIGURE_DEPENDS ${SOURCE_DIR}/*.cpp)
 
 add_executable(JoystickTesting WIN32
     ${SOURCE_FILES}

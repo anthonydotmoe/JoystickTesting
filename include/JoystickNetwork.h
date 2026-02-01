@@ -16,3 +16,5 @@ void SubmitJoystickState(const JoystickState& state);
 std::wstring GetNetworkStatusText();
 bool GetInvertYSetting();
 void SetInvertYSetting(bool enabled);
+void SubmitReturnHomeSetting(bool disabled);
+bool ConsumeReturnHomeSettingUpdate(bool* disabled);

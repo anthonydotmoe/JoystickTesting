@@ -33,3 +33,4 @@
 #define IDC_NetResponse                 1045
 #define IDC_NetResponse_TEXT            1046
 #define IDC_INVERT_Y                    1047
+#define IDC_DISABLE_RETURN_HOME         1048

@@ -1,14 +1,17 @@
 #include "JoystickNetwork.h"
 
+#include "LogUtils.h"
+#include "RegistryUtils.h"
+#include "StringUtils.h"
+
 #include <Windows.h>
 #include <winhttp.h>
-#include <winreg.h>
 
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
-#include <fstream>
-#include <iomanip>
+#include <cctype>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -19,12 +22,14 @@ constexpr auto kSendInterval = std::chrono::milliseconds(16);
 constexpr wchar_t kRegistrySubkey[] = L"SOFTWARE\\JoystickTesting";
 constexpr size_t kMaxLogBodyBytes = 1024;
 constexpr wchar_t kRegistryInvertYName[] = L"Invert Y";
+constexpr DWORD kReturnHomeAfterInactivityMs = 60000;
 
 struct NetworkConfig
 {
     std::wstring host = L"192.168.3.251";
     INTERNET_PORT port = 443;
     std::wstring loginPath = L"/api/auth/login";
+    std::wstring cameraPath = L"/proxy/protect/api/cameras/67a2bce203a1b203e4001891";
     std::wstring movePath = L"/proxy/protect/api/cameras/67a2bce203a1b203e4001891/move";
     std::string username;
     std::string password;
@@ -46,154 +51,6 @@ std::string BuildLoginPayload(const NetworkConfig& config)
         "}";
 }
 
-std::wstring GetLogFilePath()
-{
-    wchar_t modulePath[MAX_PATH] = {};
-    if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) == 0)
-        return L"JoystickTesting.log";
-
-    std::wstring path(modulePath);
-    const size_t lastSlash = path.find_last_of(L"\\/");
-    if (lastSlash != std::wstring::npos)
-        path.resize(lastSlash + 1);
-    path += L"JoystickTesting.log";
-    return path;
-}
-
-void AppendLogLine(const std::wstring& line)
-{
-    static std::mutex logMutex;
-    const std::wstring path = GetLogFilePath();
-
-    std::scoped_lock lock(logMutex);
-    std::wofstream stream(path, std::ios::app);
-    if (!stream.is_open())
-        return;
-
-    SYSTEMTIME st = {};
-    GetLocalTime(&st);
-    stream << L"["
-           << st.wYear << L"-"
-           << std::setw(2) << std::setfill(L'0') << st.wMonth << L"-"
-           << std::setw(2) << std::setfill(L'0') << st.wDay << L" "
-           << std::setw(2) << std::setfill(L'0') << st.wHour << L":"
-           << std::setw(2) << std::setfill(L'0') << st.wMinute << L":"
-           << std::setw(2) << std::setfill(L'0') << st.wSecond
-           << L"] " << line << L"\n";
-}
-
-std::wstring Utf8ToWide(const std::string& value)
-{
-    if (value.empty())
-        return L"";
-
-    const int size = MultiByteToWideChar(CP_UTF8, 0, value.c_str(),
-        static_cast<int>(value.size()), nullptr, 0);
-    if (size <= 0)
-        return L"";
-
-    std::wstring output;
-    output.resize(size);
-    MultiByteToWideChar(CP_UTF8, 0, value.c_str(),
-        static_cast<int>(value.size()), output.data(), size);
-    return output;
-}
-
-std::wstring ReadRegistryStringValue(HKEY root, const wchar_t* subkey, const wchar_t* valueName)
-{
-    DWORD type = 0;
-    DWORD size = 0;
-    if (RegGetValueW(root, subkey, valueName, RRF_RT_REG_SZ, &type, nullptr, &size) != ERROR_SUCCESS)
-        return L"";
-
-    std::wstring buffer;
-    buffer.resize(size / sizeof(wchar_t));
-    if (RegGetValueW(root, subkey, valueName, RRF_RT_REG_SZ, &type, buffer.data(), &size) != ERROR_SUCCESS)
-        return L"";
-
-    if (!buffer.empty() && buffer.back() == L'\0')
-        buffer.pop_back();
-    return buffer;
-}
-
-bool ReadRegistryDwordValue(HKEY root, const wchar_t* subkey, const wchar_t* valueName, DWORD* outValue)
-{
-    DWORD type = 0;
-    DWORD size = sizeof(DWORD);
-    DWORD value = 0;
-    if (RegGetValueW(root, subkey, valueName, RRF_RT_REG_DWORD, &type, &value, &size) != ERROR_SUCCESS)
-        return false;
-
-    if (outValue)
-        *outValue = value;
-    return true;
-}
-
-std::wstring ReadRegistryString(const wchar_t* valueName)
-{
-    std::wstring value = ReadRegistryStringValue(HKEY_CURRENT_USER, kRegistrySubkey, valueName);
-    if (!value.empty())
-        return value;
-    return ReadRegistryStringValue(HKEY_LOCAL_MACHINE, kRegistrySubkey, valueName);
-}
-
-bool ReadRegistryDword(const wchar_t* valueName, DWORD* outValue)
-{
-    if (ReadRegistryDwordValue(HKEY_CURRENT_USER, kRegistrySubkey, valueName, outValue))
-        return true;
-    return ReadRegistryDwordValue(HKEY_LOCAL_MACHINE, kRegistrySubkey, valueName, outValue);
-}
-
-bool WriteRegistryDword(const wchar_t* valueName, DWORD value)
-{
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistrySubkey, 0, nullptr, 0,
-            KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
-        return false;
-
-    const LONG result = RegSetValueExW(
-        key,
-        valueName,
-        0,
-        REG_DWORD,
-        reinterpret_cast<const BYTE*>(&value),
-        sizeof(value));
-    RegCloseKey(key);
-    return result == ERROR_SUCCESS;
-}
-
-std::wstring TrimWide(const std::wstring& value)
-{
-    if (value.empty())
-        return value;
-
-    size_t start = 0;
-    while (start < value.size() && value[start] <= L' ')
-        ++start;
-
-    size_t end = value.size();
-    while (end > start && value[end - 1] <= L' ')
-        --end;
-
-    return value.substr(start, end - start);
-}
-
-std::string WideToUtf8(const std::wstring& value)
-{
-    if (value.empty())
-        return {};
-
-    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(),
-        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-    if (size <= 0)
-        return {};
-
-    std::string output;
-    output.resize(size);
-    WideCharToMultiByte(CP_UTF8, 0, value.c_str(),
-        static_cast<int>(value.size()), output.data(), size, nullptr, nullptr);
-    return output;
-}
 
 void ApplyHostAndPort(NetworkConfig& config, const std::wstring& address)
 {
@@ -219,9 +76,10 @@ void ApplyHostAndPort(NetworkConfig& config, const std::wstring& address)
 
 bool LoadConfigFromRegistry(NetworkConfig& config)
 {
-    const std::wstring controllerAddress = TrimWide(ReadRegistryString(L"Controller Address"));
-    const std::wstring userName = TrimWide(ReadRegistryString(L"Username"));
-    const std::wstring password = TrimWide(ReadRegistryString(L"Password"));
+    const std::wstring controllerAddress =
+        TrimWide(ReadRegistryString(kRegistrySubkey, L"Controller Address"));
+    const std::wstring userName = TrimWide(ReadRegistryString(kRegistrySubkey, L"Username"));
+    const std::wstring password = TrimWide(ReadRegistryString(kRegistrySubkey, L"Password"));
 
     if (controllerAddress.empty() || userName.empty() || password.empty())
         return false;
@@ -241,6 +99,48 @@ std::string BuildMovePayload(const JoystickState& state)
         "\"y\":" + std::to_string(state.y) + ","
         "\"z\":" + std::to_string(state.z) +
         "}}";
+}
+
+std::string BuildReturnHomePayload(bool disabled)
+{
+    if (disabled)
+        return "{\"ptz\":{\"returnHomeAfterInactivityMs\":null}}";
+
+    return "{\"ptz\":{\"returnHomeAfterInactivityMs\":" +
+        std::to_string(kReturnHomeAfterInactivityMs) + "}}";
+}
+
+bool TryParseReturnHomeDisabled(const std::string& body, bool* outDisabled)
+{
+    const std::string key = "\"returnHomeAfterInactivityMs\"";
+    size_t pos = body.find(key);
+    if (pos == std::string::npos)
+        return false;
+
+    pos = body.find(':', pos + key.size());
+    if (pos == std::string::npos)
+        return false;
+
+    ++pos;
+    while (pos < body.size() && std::isspace(static_cast<unsigned char>(body[pos])))
+        ++pos;
+
+    if (body.compare(pos, 4, "null") == 0)
+    {
+        if (outDisabled)
+            *outDisabled = true;
+        return true;
+    }
+
+    const char* start = body.c_str() + pos;
+    char* end = nullptr;
+    std::strtol(start, &end, 10);
+    if (end == start)
+        return false;
+
+    if (outDisabled)
+        *outDisabled = false;
+    return true;
 }
 
 struct HttpResponse
@@ -411,6 +311,7 @@ void CALLBACK WinHttpStatusCallback(
     DWORD statusInfoLength);
 
 HRESULT SendJsonRequest(HINTERNET connection,
+    const wchar_t* method,
     const std::wstring& path,
     const std::string& payload,
     const std::wstring& cookieHeader,
@@ -418,6 +319,7 @@ HRESULT SendJsonRequest(HINTERNET connection,
     HttpResponse* response,
     DWORD* outWin32Error,
     std::wstring* outErrorText,
+    std::string* outResponseBody,
     NetworkWorker* statusContext);
 
 class NetworkWorker
@@ -430,6 +332,7 @@ public:
             return;
         running_ = true;
         stopRequested_ = false;
+        needsReturnHomeQuery_ = true;
         SetStatus(L"Starting");
         worker_ = std::thread(&NetworkWorker::Run, this);
     }
@@ -446,9 +349,13 @@ public:
         if (worker_.joinable())
             worker_.join();
 
+        SendReturnHomeOnStop();
+
         std::scoped_lock lock(mutex_);
         running_ = false;
         hasState_ = false;
+        hasReturnHomeSetting_ = false;
+        returnHomeStateKnown_ = false;
         CloseHandles();
         ResetAuth();
         SetStatus(L"Stopped");
@@ -464,10 +371,31 @@ public:
         cv_.notify_all();
     }
 
+    void SubmitReturnHomeSetting(bool disabled)
+    {
+        {
+            std::scoped_lock lock(mutex_);
+            returnHomeDisabled_ = disabled;
+            hasReturnHomeSetting_ = true;
+        }
+        cv_.notify_all();
+    }
+
     std::wstring GetStatus()
     {
         std::scoped_lock lock(statusMutex_);
         return status_;
+    }
+
+    bool ConsumeReturnHomeSettingUpdate(bool* disabled)
+    {
+        std::scoped_lock lock(returnHomeStateMutex_);
+        if (!hasReturnHomeSettingUpdate_)
+            return false;
+        hasReturnHomeSettingUpdate_ = false;
+        if (disabled)
+            *disabled = returnHomeDisabledState_;
+        return true;
     }
 
     void RecordSecureFailure(DWORD flags)
@@ -494,28 +422,103 @@ private:
 
         for (;;)
         {
-            cv_.wait_until(lock, nextSend, [&]() { return stopRequested_ || hasState_; });
+            cv_.wait_until(lock, nextSend, [&]() {
+                return stopRequested_ || hasState_ || hasReturnHomeSetting_ || needsReturnHomeQuery_;
+            });
             if (stopRequested_)
                 break;
 
-            if (!hasState_)
+            if (!hasState_ && !hasReturnHomeSetting_ && !needsReturnHomeQuery_)
             {
                 nextSend = std::chrono::steady_clock::now() + kSendInterval;
                 continue;
             }
 
+            const bool sendReturnHome = hasReturnHomeSetting_;
+            const bool returnHomeDisabled = returnHomeDisabled_;
+            hasReturnHomeSetting_ = false;
+
             JoystickState snapshot = latestState_;
+            const bool sendMove = hasState_;
             hasState_ = false;
+            const bool queryReturnHome = needsReturnHomeQuery_ ||
+                (!returnHomeStateKnown_ && (sendMove || sendReturnHome));
+            needsReturnHomeQuery_ = false;
             lock.unlock();
 
-            const std::string payload = BuildMovePayload(snapshot);
-            if (EnsureLogin())
+            const bool loggedIn = EnsureLogin();
+            if (loggedIn && queryReturnHome)
             {
                 HttpResponse response = {};
                 DWORD error = 0;
                 std::wstring errorText;
-                const HRESULT hr = SendJsonRequest(connection_, GetNetworkConfig().movePath, payload,
-                    cookieHeader_, csrfToken_, &response, &error, &errorText, this);
+                std::string responseBody;
+                const HRESULT hr = SendJsonRequest(connection_, L"GET",
+                    GetNetworkConfig().cameraPath, "",
+                    cookieHeader_, csrfToken_, &response, &error, &errorText, &responseBody, this);
+                if (FAILED(hr))
+                {
+                    SetStatusError(L"Return home query failed", error, errorText);
+                }
+                else
+                {
+                    SetStatusHttp(L"Return home query", response.status);
+                    if (response.status >= 200 && response.status < 300)
+                    {
+                        bool disabled = false;
+                        if (TryParseReturnHomeDisabled(responseBody, &disabled))
+                        {
+                            std::scoped_lock stateLock(returnHomeStateMutex_);
+                            returnHomeDisabledState_ = disabled;
+                            hasReturnHomeSettingUpdate_ = true;
+                        }
+                        {
+                            std::scoped_lock stateLock(mutex_);
+                            returnHomeStateKnown_ = true;
+                        }
+                    }
+                }
+
+                if (response.status == 401 || response.status == 403)
+                {
+                    SetStatusHttp(L"Unauthorized", response.status);
+                    ResetAuth();
+                }
+            }
+
+            if (loggedIn && sendReturnHome)
+            {
+                const std::string payload = BuildReturnHomePayload(returnHomeDisabled);
+                HttpResponse response = {};
+                DWORD error = 0;
+                std::wstring errorText;
+                const HRESULT hr = SendJsonRequest(connection_, L"PATCH",
+                    GetNetworkConfig().cameraPath, payload,
+                    cookieHeader_, csrfToken_, &response, &error, &errorText, nullptr, this);
+                if (FAILED(hr))
+                {
+                    SetStatusError(L"Return home update failed", error, errorText);
+                }
+                else
+                {
+                    SetStatusHttp(L"Return home updated", response.status);
+                }
+
+                if (response.status == 401 || response.status == 403)
+                {
+                    SetStatusHttp(L"Unauthorized", response.status);
+                    ResetAuth();
+                }
+            }
+
+            if (loggedIn && sendMove)
+            {
+                const std::string payload = BuildMovePayload(snapshot);
+                HttpResponse response = {};
+                DWORD error = 0;
+                std::wstring errorText;
+                const HRESULT hr = SendJsonRequest(connection_, L"POST", GetNetworkConfig().movePath,
+                    payload, cookieHeader_, csrfToken_, &response, &error, &errorText, nullptr, this);
                 if (FAILED(hr))
                 {
                     SetStatusError(L"Move failed", error, errorText);
@@ -600,8 +603,8 @@ private:
         SetStatus(L"Logging in");
         DWORD error = 0;
         std::wstring errorText;
-        if (FAILED(SendJsonRequest(connection_, config.loginPath, payload, L"", L"", &response,
-            &error, &errorText, this)))
+        if (FAILED(SendJsonRequest(connection_, L"POST", config.loginPath, payload, L"", L"", &response,
+            &error, &errorText, nullptr, this)))
         {
             SetStatusError(L"Login failed", error, errorText);
             return false;
@@ -633,6 +636,21 @@ private:
         cookieHeader_.clear();
         csrfToken_.clear();
         configLoaded_ = false;
+        needsReturnHomeQuery_ = true;
+        returnHomeStateKnown_ = false;
+    }
+
+    void SendReturnHomeOnStop()
+    {
+        if (!EnsureLogin())
+            return;
+
+        const std::string payload = BuildReturnHomePayload(false);
+        HttpResponse response = {};
+        DWORD error = 0;
+        std::wstring errorText;
+        SendJsonRequest(connection_, L"PATCH", GetNetworkConfig().cameraPath, payload,
+            cookieHeader_, csrfToken_, &response, &error, &errorText, nullptr, this);
     }
 
     void CloseHandles()
@@ -656,6 +674,10 @@ private:
     bool stopRequested_ = false;
     bool hasState_ = false;
     JoystickState latestState_ = {};
+    bool hasReturnHomeSetting_ = false;
+    bool returnHomeDisabled_ = false;
+    bool needsReturnHomeQuery_ = true;
+    bool returnHomeStateKnown_ = false;
 
     HINTERNET session_ = nullptr;
     HINTERNET connection_ = nullptr;
@@ -667,6 +689,10 @@ private:
 
     std::mutex statusMutex_;
     std::wstring status_ = L"Idle";
+
+    std::mutex returnHomeStateMutex_;
+    bool hasReturnHomeSettingUpdate_ = false;
+    bool returnHomeDisabledState_ = false;
 
     std::mutex secureFailureMutex_;
     DWORD lastSecureFailureFlags_ = 0;
@@ -703,6 +729,7 @@ private:
 };
 
 HRESULT SendJsonRequest(HINTERNET connection,
+    const wchar_t* method,
     const std::wstring& path,
     const std::string& payload,
     const std::wstring& cookieHeader,
@@ -710,6 +737,7 @@ HRESULT SendJsonRequest(HINTERNET connection,
     HttpResponse* response,
     DWORD* outWin32Error,
     std::wstring* outErrorText,
+    std::string* outResponseBody,
     NetworkWorker* statusContext)
 {
     HRESULT hr = S_OK;
@@ -721,9 +749,10 @@ HRESULT SendJsonRequest(HINTERNET connection,
     if (outErrorText)
         outErrorText->clear();
 
+    const wchar_t* requestMethod = method && *method ? method : L"POST";
     HINTERNET hRequest = WinHttpOpenRequest(
         connection,
-        L"POST",
+        requestMethod,
         path.c_str(),
         nullptr,
         WINHTTP_NO_REFERER,
@@ -761,17 +790,25 @@ HRESULT SendJsonRequest(HINTERNET connection,
         headers += L"\r\n";
     }
 
+    const bool hasPayload = !payload.empty();
+    LPVOID payloadData = hasPayload ? (LPVOID)payload.data() : nullptr;
+    const DWORD payloadSize = hasPayload ? static_cast<DWORD>(payload.size()) : 0;
     BOOL results = WinHttpSendRequest(
         hRequest,
         headers.c_str(),
         -1L,
-        (LPVOID)payload.data(),
-        static_cast<DWORD>(payload.size()),
-        static_cast<DWORD>(payload.size()),
+        payloadData,
+        payloadSize,
+        payloadSize,
         0);
 
     {
-        std::wstring logLine = L"POST " + path + L" payload=" + RedactPassword(payload);
+        std::wstring logLine = std::wstring(requestMethod) + L" " + path;
+        if (hasPayload)
+        {
+            logLine += L" payload=";
+            logLine += RedactPassword(payload);
+        }
         AppendLogLine(logLine);
     }
 
@@ -877,6 +914,8 @@ cleanup:
         }
         AppendLogLine(line);
     }
+    if (outResponseBody)
+        *outResponseBody = responseBody;
     return hr;
 }
 
@@ -922,6 +961,16 @@ void SubmitJoystickState(const JoystickState& state)
     GetWorker().Submit(state);
 }
 
+void SubmitReturnHomeSetting(bool disabled)
+{
+    GetWorker().SubmitReturnHomeSetting(disabled);
+}
+
+bool ConsumeReturnHomeSettingUpdate(bool* disabled)
+{
+    return GetWorker().ConsumeReturnHomeSettingUpdate(disabled);
+}
+
 std::wstring GetNetworkStatusText()
 {
     return GetWorker().GetStatus();
@@ -930,12 +979,12 @@ std::wstring GetNetworkStatusText()
 bool GetInvertYSetting()
 {
     DWORD value = 0;
-    if (!ReadRegistryDword(kRegistryInvertYName, &value))
+    if (!ReadRegistryDword(kRegistrySubkey, kRegistryInvertYName, &value))
         return false;
     return value != 0;
 }
 
 void SetInvertYSetting(bool enabled)
 {
-    WriteRegistryDword(kRegistryInvertYName, enabled ? 1u : 0u);
+    WriteRegistryDword(kRegistrySubkey, kRegistryInvertYName, enabled ? 1u : 0u);
 }

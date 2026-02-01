@@ -34,3 +34,8 @@ https://192.168.3.251/proxy/protect/api/cameras/67a2bce203a1b203e4001891/move
 
 Simply map the X, Y, and Z values from the Joystick to the coordinates in the
 request, and send it out periodically. The interval is yet to be decided.
+
+For testing that builds are successful, this command should work:
+```
+cmake --build .\out\build\x64-debug\ --target JoystickTesting
+```

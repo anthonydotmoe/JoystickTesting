@@ -202,6 +202,13 @@ HRESULT UpdateInputState(HWND hDlg)
     const std::wstring networkStatus = GetNetworkStatusText();
     SetWindowText(GetDlgItem(hDlg, IDC_NetResponse), networkStatus.c_str());
 
+    bool returnHomeDisabled = false;
+    if (ConsumeReturnHomeSettingUpdate(&returnHomeDisabled))
+    {
+        CheckDlgButton(hDlg, IDC_DISABLE_RETURN_HOME,
+            returnHomeDisabled ? BST_CHECKED : BST_UNCHECKED);
+    }
+
     return S_OK;
 }
 
