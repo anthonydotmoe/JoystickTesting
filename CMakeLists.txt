@@ -37,4 +37,4 @@ target_compile_definitions(JoystickTesting PRIVATE
 )
 
 # If you want static CRT (/MT) uncomment:
-# set_property(TARGET newobjext PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set_property(TARGET JoystickTesting PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
