@@ -13,11 +13,8 @@
 #include <cmath>
 #include <vector>
 
-#pragma warning(push)
-#pragma warning(disable : 6000 28251 4996)
 #include <dinput.h>
 #include <dinputd.h>
-#pragma warning(pop)
 
 namespace {
 constexpr double kDeadzoneMagnitude = 20.0; // Raw axis magnitude threshold.
