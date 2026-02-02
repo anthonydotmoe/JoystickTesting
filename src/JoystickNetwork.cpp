@@ -107,9 +107,9 @@ std::string BuildMovePayload(const JoystickState& state)
     return "{"
         "\"type\":\"continuous\","
         "\"payload\":{"
-        "\"x\":" + std::to_string(state.x) + ","
-        "\"y\":" + std::to_string(state.y) + ","
-        "\"z\":" + std::to_string(state.z) +
+        "\"x\":" + std::to_string(static_cast<int>(state.x)) + ","
+        "\"y\":" + std::to_string(static_cast<int>(state.y)) + ","
+        "\"z\":" + std::to_string(static_cast<int>(state.z)) +
         "}}";
 }
 
