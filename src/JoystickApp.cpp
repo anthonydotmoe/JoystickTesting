@@ -2,6 +2,7 @@
 
 #include "DirectInputManager.h"
 #include "JoystickNetwork.h"
+#include "LogUtils.h"
 #include "RegistryUtils.h"
 #include "StringUtils.h"
 #include "res.h"
@@ -208,6 +209,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
     switch (msg)
     {
         case WM_INITDIALOG:
+            SetLogAnchorWindow(hDlg);
             if (FAILED(InitDirectInput(hDlg)))
             {
                 MessageBox(nullptr, TEXT("Error Initializing DirectInput"),
@@ -272,6 +274,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
             break;
 
         case WM_DESTROY:
+            SetLogAnchorWindow(nullptr);
             KillTimer(hDlg, 0);
             StopNetworkWorker();
             FreeDirectInput();

@@ -19,12 +19,28 @@ struct LogState
     bool initialized = false;
     bool debugEnabled = false;
     bool consoleReady = false;
+    HWND anchorWindow = nullptr;
 };
 
 LogState& GetLogState()
 {
     static LogState state;
     return state;
+}
+
+void PositionConsoleWindow(const LogState& state)
+{
+    HWND consoleWindow = GetConsoleWindow();
+    if (!consoleWindow)
+        return;
+
+    HWND insertAfter = HWND_BOTTOM;
+    if (state.anchorWindow && IsWindow(state.anchorWindow))
+        insertAfter = state.anchorWindow;
+
+    SetWindowPos(consoleWindow, insertAfter, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    ShowWindow(consoleWindow, SW_SHOWNOACTIVATE);
 }
 
 void EnsureLoggingInitialized(LogState& state)
@@ -44,6 +60,7 @@ void EnsureLoggingInitialized(LogState& state)
             {
                 setvbuf(stdout, nullptr, _IONBF, 0);
                 state.consoleReady = true;
+                PositionConsoleWindow(state);
             }
         }
     }
@@ -64,6 +81,16 @@ std::wstring BuildTimestampedLine(const std::wstring& line)
            << L"] " << line;
     return stream.str();
 }
+}
+
+void SetLogAnchorWindow(HWND window)
+{
+    LogState& state = GetLogState();
+    std::scoped_lock lock(state.mutex);
+    state.anchorWindow = window;
+
+    if (state.consoleReady)
+        PositionConsoleWindow(state);
 }
 
 void AppendLogLine(const std::wstring& line)
